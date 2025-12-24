@@ -4,13 +4,22 @@ Main entry point for Kepler CFO.
 """
 import os
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from core.brain import classify_expense, generate_response
-from core.db import insert_transaction, update_budget_spent, get_budget_status
+from core.db import (
+    insert_transaction, 
+    update_budget_spent, 
+    get_budget_status,
+    get_all_debts,
+    update_debt_balance,
+    get_patrimony,
+    calculate_monthly_patrimony,
+    update_patrimony_end_of_month
+)
 from core.telegram import send_message
 
 load_dotenv()
@@ -20,6 +29,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Kepler CFO Telegram Bot")
+
+
+def detect_debt_payment(description: str, category: str, amount: float) -> Optional[str]:
+    """
+    Detect if a payment is for Lumni or ICETEX debt.
+    
+    Args:
+        description: Transaction description
+        category: Transaction category
+        amount: Payment amount
+        
+    Returns:
+        'Lumni' or 'ICETEX' if detected, None otherwise
+    """
+    desc_lower = description.lower()
+    
+    # Check for explicit mentions
+    if "lumni" in desc_lower:
+        return "Lumni"
+    if "icetex" in desc_lower:
+        return "ICETEX"
+    
+    # Check by amount (approximate minimum payments)
+    # ICETEX: ~$565k, Lumni: ~$546k
+    if category == "fixed_survival":
+        if 560000 <= amount <= 570000:
+            return "ICETEX"
+        elif 540000 <= amount <= 550000:
+            return "Lumni"
+    
+    return None
 
 
 def verify_telegram_token(request: Request) -> bool:
@@ -152,6 +192,31 @@ async def webhook(request: Request):
                     # Step 4: Update budget
                     await update_budget_spent(category=category, amount=amount)
                     
+                    # Step 4.5: Check if this is a debt payment and update debt
+                    # Update debt for both fixed_survival (monthly) and debt_offensive (extraordinary)
+                    debt_name = detect_debt_payment(description, category, amount)
+                    if debt_name:
+                        try:
+                            await update_debt_balance(debt_name, amount)
+                            logger.info(f"Updated {debt_name} debt balance by {amount} (category: {category})")
+                        except Exception as e:
+                            logger.warning(f"Could not update debt balance: {str(e)}")
+                    # Also check if debt_offensive mentions a specific debt
+                    elif category == "debt_offensive":
+                        desc_lower = description.lower()
+                        if "lumni" in desc_lower:
+                            try:
+                                await update_debt_balance("Lumni", amount)
+                                logger.info(f"Updated Lumni debt balance by {amount} (extraordinary payment)")
+                            except Exception as e:
+                                logger.warning(f"Could not update Lumni debt balance: {str(e)}")
+                        elif "icetex" in desc_lower:
+                            try:
+                                await update_debt_balance("ICETEX", amount)
+                                logger.info(f"Updated ICETEX debt balance by {amount} (extraordinary payment)")
+                            except Exception as e:
+                                logger.warning(f"Could not update ICETEX debt balance: {str(e)}")
+                    
                     # Step 5: Get budget status
                     budget_status = await get_budget_status(category)
                     
@@ -167,6 +232,121 @@ async def webhook(request: Request):
                 except Exception as e:
                     logger.error(f"Error processing expense: {str(e)}")
                     response_text = f"Error procesando el gasto: {str(e)}"
+        
+        elif action == "check_debt":
+            # User wants to check debt status
+            try:
+                debts = await get_all_debts()
+                if not debts:
+                    response_text = "No se encontraron deudas registradas."
+                else:
+                    debt_info = []
+                    total_debt = 0
+                    for debt in debts:
+                        name = debt.get("name", "Unknown")
+                        current = float(debt.get("current_balance", 0) or 0)
+                        initial = float(debt.get("initial_balance", 0) or 0)
+                        paid = initial - current
+                        total_debt += current
+                        debt_info.append(f"{name}: ${current:,.0f} COP (Pagado: ${paid:,.0f})")
+                    
+                    response_text = "💳 ESTADO DE DEUDAS:\n\n"
+                    response_text += "\n".join(debt_info)
+                    response_text += f"\n\nTotal adeudado: ${total_debt:,.0f} COP"
+            except Exception as e:
+                logger.error(f"Error getting debt status: {str(e)}")
+                response_text = f"Error consultando deudas: {str(e)}"
+        
+        elif action == "check_patrimony":
+            # User wants to check patrimony
+            try:
+                monthly_status = await calculate_monthly_patrimony()
+                patrimony = await get_patrimony()
+                
+                current_patrimony = float(patrimony.get("current_balance", 0) or 0) if patrimony else 0
+                monthly_income = monthly_status.get("monthly_income", 0)
+                monthly_expenses = monthly_status.get("monthly_expenses", 0)
+                remaining = monthly_status.get("remaining_this_month", 0)
+                projected = monthly_status.get("projected_patrimony", current_patrimony)
+                
+                response_text = "💰 PATRIMONIO:\n\n"
+                response_text += f"Patrimonio acumulado: ${current_patrimony:,.0f} COP\n"
+                response_text += f"\nEste mes:\n"
+                response_text += f"  Ingresos: ${monthly_income:,.0f} COP\n"
+                response_text += f"  Gastos: ${monthly_expenses:,.0f} COP\n"
+                response_text += f"  Queda: ${remaining:,.0f} COP\n"
+                response_text += f"\nProyección al final del mes: ${projected:,.0f} COP"
+            except Exception as e:
+                logger.error(f"Error getting patrimony: {str(e)}")
+                response_text = f"Error consultando patrimonio: {str(e)}"
+        
+        elif action == "financial_summary":
+            # User wants complete financial summary
+            try:
+                # Get debts
+                debts = await get_all_debts()
+                total_debt = sum(float(d.get("current_balance", 0) or 0) for d in debts)
+                
+                # Get patrimony
+                monthly_status = await calculate_monthly_patrimony()
+                patrimony = await get_patrimony()
+                current_patrimony = float(patrimony.get("current_balance", 0) or 0) if patrimony else 0
+                
+                # Get all budgets
+                budget_categories = ["fixed_survival", "debt_offensive", "kepler_growth", "networking_life", "stupid_expenses"]
+                budgets_info = []
+                total_spent = 0
+                for cat in budget_categories:
+                    try:
+                        budget = await get_budget_status(cat)
+                        budgets_info.append(f"  {cat}: ${budget.get('current_spent', 0):,.0f} / ${budget.get('monthly_limit', 0):,.0f} COP")
+                        total_spent += float(budget.get('current_spent', 0) or 0)
+                    except:
+                        pass
+                
+                response_text = "📊 RESUMEN FINANCIERO:\n\n"
+                response_text += "💳 DEUDAS:\n"
+                for debt in debts:
+                    name = debt.get("name", "Unknown")
+                    current = float(debt.get("current_balance", 0) or 0)
+                    response_text += f"  {name}: ${current:,.0f} COP\n"
+                response_text += f"  Total: ${total_debt:,.0f} COP\n\n"
+                
+                response_text += "💰 PATRIMONIO:\n"
+                response_text += f"  Acumulado: ${current_patrimony:,.0f} COP\n"
+                response_text += f"  Este mes queda: ${monthly_status.get('remaining_this_month', 0):,.0f} COP\n\n"
+                
+                response_text += "📈 PRESUPUESTOS:\n"
+                response_text += "\n".join(budgets_info)
+                response_text += f"\n  Total gastado: ${total_spent:,.0f} COP"
+                
+            except Exception as e:
+                logger.error(f"Error getting financial summary: {str(e)}")
+                response_text = f"Error generando resumen: {str(e)}"
+        
+        elif action == "close_month":
+            # User wants to close the month and update patrimony
+            try:
+                monthly_status = await calculate_monthly_patrimony()
+                remaining = monthly_status.get("remaining_this_month", 0)
+                
+                if remaining <= 0:
+                    response_text = f"⚠️ Este mes gastaste más de lo que ingresaste. Diferencia: ${abs(remaining):,.0f} COP. No se puede sumar al patrimonio."
+                else:
+                    patrimony_before = await get_patrimony()
+                    patrimony_before_balance = float(patrimony_before.get("current_balance", 0) or 0) if patrimony_before else 0
+                    
+                    updated_patrimony = await update_patrimony_end_of_month()
+                    patrimony_after_balance = float(updated_patrimony.get("current_balance", 0) or 0)
+                    
+                    response_text = f"✅ MES CERRADO\n\n"
+                    response_text += f"Patrimonio antes: ${patrimony_before_balance:,.0f} COP\n"
+                    response_text += f"Lo que quedó este mes: ${remaining:,.0f} COP\n"
+                    response_text += f"Patrimonio ahora: ${patrimony_after_balance:,.0f} COP\n\n"
+                    response_text += f"💡 Recuerda resetear los presupuestos para el nuevo mes."
+            except Exception as e:
+                logger.error(f"Error closing month: {str(e)}")
+                response_text = f"Error cerrando el mes: {str(e)}"
         
         else:
             response_text = "Acción no reconocida. Por favor, intenta de nuevo."
