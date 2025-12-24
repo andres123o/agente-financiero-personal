@@ -35,7 +35,7 @@ def get_supabase_headers() -> Dict[str, str]:
     }
 
 
-async def insert_transaction(amount: float, category: str, description: str) -> Dict[str, Any]:
+async def insert_transaction(amount: float, category: str, description: str, transaction_type: str = "expense") -> Dict[str, Any]:
     """
     Insert a new transaction into the database.
     
@@ -43,6 +43,7 @@ async def insert_transaction(amount: float, category: str, description: str) -> 
         amount: Transaction amount in COP
         category: One of the valid categories
         description: Transaction description
+        transaction_type: Type of transaction - "expense" or "income" (default: "expense")
         
     Returns:
         Dict with transaction data
@@ -51,7 +52,8 @@ async def insert_transaction(amount: float, category: str, description: str) -> 
         data = {
             "amount": float(amount),
             "category": category,
-            "description": description if description else None
+            "description": description if description else None,
+            "type": transaction_type
         }
         
         headers = get_supabase_headers()

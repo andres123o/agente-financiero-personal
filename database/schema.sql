@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   amount DECIMAL(10, 2) NOT NULL,
   category VARCHAR(50) NOT NULL,
+  type VARCHAR(20) NOT NULL CHECK (type IN ('expense', 'income')),
   description TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
