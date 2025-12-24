@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-from core.brain import classify_expense, generate_response
+from core.brain import classify_expense, generate_response, generate_spending_advice
 from core.db import (
     insert_transaction, 
     update_budget_spent, 
@@ -18,7 +18,9 @@ from core.db import (
     update_debt_balance,
     get_patrimony,
     calculate_monthly_patrimony,
-    update_patrimony_end_of_month
+    update_patrimony_end_of_month,
+    reset_all_budgets,
+    get_complete_financial_state
 )
 from core.telegram import send_message
 
@@ -332,6 +334,13 @@ async def webhook(request: Request):
                 
                 if remaining <= 0:
                     response_text = f"⚠️ Este mes gastaste más de lo que ingresaste. Diferencia: ${abs(remaining):,.0f} COP. No se puede sumar al patrimonio."
+                    # Reset budgets anyway even if negative balance
+                    try:
+                        await reset_all_budgets()
+                        response_text += "\n\n✅ Presupuestos reseteados para el nuevo mes."
+                    except Exception as e:
+                        logger.warning(f"Could not reset budgets: {str(e)}")
+                        response_text += "\n\n⚠️ No se pudieron resetear los presupuestos."
                 else:
                     patrimony_before = await get_patrimony()
                     patrimony_before_balance = float(patrimony_before.get("current_balance", 0) or 0) if patrimony_before else 0
@@ -339,14 +348,33 @@ async def webhook(request: Request):
                     updated_patrimony = await update_patrimony_end_of_month()
                     patrimony_after_balance = float(updated_patrimony.get("current_balance", 0) or 0)
                     
+                    # Reset all budgets for the new month
+                    await reset_all_budgets()
+                    
                     response_text = f"✅ MES CERRADO\n\n"
                     response_text += f"Patrimonio antes: ${patrimony_before_balance:,.0f} COP\n"
                     response_text += f"Lo que quedó este mes: ${remaining:,.0f} COP\n"
                     response_text += f"Patrimonio ahora: ${patrimony_after_balance:,.0f} COP\n\n"
-                    response_text += f"💡 Recuerda resetear los presupuestos para el nuevo mes."
+                    response_text += f"✅ Presupuestos reseteados a cero para el nuevo mes."
             except Exception as e:
                 logger.error(f"Error closing month: {str(e)}")
                 response_text = f"Error cerrando el mes: {str(e)}"
+        
+        elif action == "consult_spending":
+            # User wants advice on spending something
+            try:
+                # Get complete financial state
+                financial_state = await get_complete_financial_state()
+                
+                # Generate spending advice using the guardian/coach logic
+                response_text = generate_spending_advice(
+                    user_query=user_text,
+                    amount=amount if amount > 0 else 0,
+                    financial_state=financial_state
+                )
+            except Exception as e:
+                logger.error(f"Error generating spending advice: {str(e)}")
+                response_text = f"Error analizando tu consulta: {str(e)}"
         
         else:
             response_text = "Acción no reconocida. Por favor, intenta de nuevo."

@@ -135,6 +135,7 @@ ACCIONES VÁLIDAS:
 - "check_patrimony": El usuario quiere ver su patrimonio actual (dinero disponible en banco)
 - "financial_summary": El usuario quiere un resumen financiero completo (presupuesto + deuda + patrimonio)
 - "close_month": El usuario quiere cerrar el mes (sumar lo que queda al patrimonio acumulado)
+- "consult_spending": El usuario quiere consultar si debería gastar en algo (análisis y consejo financiero)
 
 DETECCIÓN DE CONSULTAS:
 - Si el usuario pregunta "¿cuánto debo?", "cuánto debo en lumni", "estado de deuda", "cuánto debo en icetex", "mis deudas" → action: "check_debt"
@@ -142,6 +143,7 @@ DETECCIÓN DE CONSULTAS:
 - Si el usuario pregunta "resumen financiero", "estado financiero", "cómo estoy financieramente", "resumen completo" → action: "financial_summary"
 - Si pregunta "cerrar mes", "fin de mes", "actualizar patrimonio", "sumar al patrimonio" → action: "close_month"
 - Si pregunta por presupuesto específico o "cuánto me queda en X" → action: "check_budget" (con category correspondiente)
+- Si pregunta sobre QUERER gastar en algo futuro: "quiero comprar", "necesito", "debería comprar", "quiero un celular", "quiero ropa nueva", "me gustaría gastar en", "pensando en comprar" → action: "consult_spending"
 
 INSTRUCCIONES CRÍTICAS:
 - Si el mensaje no es claro, devuelve action: "unknown" y description con una pregunta específica
@@ -153,7 +155,7 @@ INSTRUCCIONES CRÍTICAS:
 
 Responde SOLO con un JSON válido en este formato:
 {
-    "action": "expense|income|check_budget|check_debt|check_patrimony|financial_summary|close_month|unknown",
+    "action": "expense|income|check_budget|check_debt|check_patrimony|financial_summary|close_month|consult_spending|unknown",
     "amount": 0.0,
     "category": "categoria_valida_o_null",
     "description": "descripción breve del gasto/ingreso o consulta"
@@ -304,4 +306,145 @@ Estado del presupuesto:
             return "Consulta tu presupuesto en la aplicación."
         else:
             return "Procesado."
+
+
+def generate_spending_advice(
+    user_query: str,
+    amount: float,
+    financial_state: Dict[str, Any]
+) -> str:
+    """
+    Generate financial advice as a guardian/coach when user wants to spend on something.
+    
+    Args:
+        user_query: User's query about wanting to spend
+        amount: Amount they want to spend
+        financial_state: Complete financial state including budgets, debts, patrimony
+        
+    Returns:
+        Guardian/coach response questioning and guiding the user
+    """
+    system_prompt = """Eres "Kepler CFO", un guardián financiero espiritual y coach que protege al usuario de malas decisiones financieras.
+
+TU ROL:
+- Eres un agente que DETIENE al usuario cuando va a hacer algo mal financieramente
+- Actúas como un coach espiritual/financiero que cuestiona decisiones impulsivas
+- Analizas el estado financiero completo antes de dar consejo
+- Eres directo, honesto, pero también comprensivo
+- Tu objetivo es hacer que el usuario REFLEXIONE antes de gastar
+
+TU PERSONALIDAD:
+- Cuestionas si realmente necesita lo que quiere comprar
+- Preguntas cosas como: "¿En serio lo necesitas?", "¿Ya revisaste tu ropero?", "¿El celular que tienes no sirve?"
+- Sugieres alternativas: "¿No sería mejor seguir ahorrando para tu emprendimiento?"
+- Eres firme y agresivo
+- Actúas como un amigo sabio que te detiene antes de que hagas algo que lamentarás
+
+CONTEXTO DEL USUARIO:
+- Tiene deudas grandes (ICETEX: $20M, Lumni: $10M)
+- Tiene un emprendimiento llamado "Kepler" que necesita financiamiento
+- Tiene un presupuesto estricto 40/40/20
+- Su meta es: matar deudas, hacer crecer el negocio, y eventualmente renunciar a su trabajo
+
+INSTRUCCIONES:
+1. Analiza el estado financiero completo (presupuestos disponibles, deudas, patrimonio)
+2. Si el gasto propuesto es un lujo innecesario (ejemplo: celular nuevo para parecer rico, ropa nueva sin necesidad real):
+   - CUESTIONA duramente: "¿En serio necesitas esto?"
+   - Pregunta si realmente lo necesita o solo quiere impresionar
+   - Sugiere que revise lo que ya tiene
+   - Recuérdale sus metas (deuda, emprendimiento)
+   - Sé firme y cruel, basado en los datos del estado financiero y en la mentalidad de Ycombinator y el libro mindset de carol S Dweck
+
+3. Si el gasto es razonable pero no hay presupuesto:
+   - Explica claramente por qué no puede gastar ahora
+   - Muestra cuánto tiene disponible vs cuánto quiere gastar
+   - Sugiere esperar o buscar alternativas
+
+4. Si el gasto es para el negocio (kepler_growth):
+   - Sé más comprensivo pero aún analiza si es necesario
+   - Pregunta si realmente aporta al negocio
+
+5. Si el gasto es para networking:
+   - Evalúa si realmente es necesario para el networking
+   - Pregunta si hay alternativas más baratas
+
+SIEMPRE:
+- Menciona sus deudas pendientes
+- Menciona su meta de hacer crecer Kepler
+- Pregunta si realmente necesita lo que quiere comprar
+- Sugiere alternativas o esperar
+- Sé un guardián que lo protege de sí mismo
+
+Responde en español, de forma directa pero comprensiva, máximo 8-10 líneas. Sé específico con números y datos del estado financiero."""
+
+    # Build user prompt with financial state
+    user_prompt = f"""El usuario quiere gastar en algo. Analiza su situación financiera y dale consejo.
+
+CONSULTA DEL USUARIO:
+"{user_query}"
+
+MONTO QUE QUIERE GASTAR:
+${amount:,.0f} COP
+
+ESTADO FINANCIERO ACTUAL:
+"""
+
+    # Add budget information
+    budgets = financial_state.get("budgets", {})
+    user_prompt += "\nPRESUPUESTOS DISPONIBLES:\n"
+    for cat, budget_info in budgets.items():
+        remaining = budget_info.get("remaining", 0)
+        limit = budget_info.get("monthly_limit", 0)
+        spent = budget_info.get("current_spent", 0)
+        user_prompt += f"- {cat}: ${remaining:,.0f} COP disponibles (de ${limit:,.0f} total, gastado: ${spent:,.0f})\n"
+
+    # Add debt information
+    debts = financial_state.get("debts", [])
+    total_debt = financial_state.get("total_debt", 0)
+    user_prompt += f"\nDEUDAS PENDIENTES:\n"
+    for debt in debts:
+        name = debt.get("name", "Unknown")
+        balance = debt.get("current_balance", 0)
+        user_prompt += f"- {name}: ${balance:,.0f} COP\n"
+    user_prompt += f"Total adeudado: ${total_debt:,.0f} COP\n"
+
+    # Add patrimony information
+    patrimony = financial_state.get("patrimony", {})
+    current_patrimony = patrimony.get("current_balance", 0)
+    remaining_month = patrimony.get("remaining_this_month", 0)
+    user_prompt += f"\nPATRIMONIO:\n"
+    user_prompt += f"- Patrimonio acumulado: ${current_patrimony:,.0f} COP\n"
+    user_prompt += f"- Lo que queda este mes: ${remaining_month:,.0f} COP\n"
+
+    user_prompt += f"\nMETAS DEL USUARIO:\n"
+    user_prompt += "- Matar deudas (prioridad: Lumni primero, luego ICETEX)\n"
+    user_prompt += "- Hacer crecer el emprendimiento Kepler\n"
+    user_prompt += "- Ahorrar para eventualmente renunciar a su trabajo\n"
+
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=400
+        )
+        
+        return response.choices[0].message.content.strip()
+        
+    except Exception as e:
+        # Fallback response
+        return f"""⚠️ ALTO. Antes de gastar ${amount:,.0f} COP, piensa:
+
+¿Realmente necesitas esto? ¿O solo quieres impresionar?
+
+Recuerda:
+- Debes ${total_debt:,.0f} COP en deudas
+- Tu patrimonio es solo ${current_patrimony:,.0f} COP
+- Tu meta es hacer crecer Kepler
+
+¿No sería mejor seguir ahorrando para tu emprendimiento?"""
 

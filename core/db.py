@@ -357,6 +357,79 @@ async def calculate_monthly_patrimony() -> Dict[str, Any]:
         raise Exception(f"Error calculating monthly patrimony: {str(e)}")
 
 
+async def reset_all_budgets() -> bool:
+    """
+    Reset all budget categories' current_spent to 0.
+    This should be called at the beginning of each month.
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/budgets"
+        data = {"current_spent": 0}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Update all budgets to reset current_spent
+            response = await client.patch(url, json=data, headers=headers)
+            response.raise_for_status()
+            return True
+    except Exception as e:
+        logger.error(f"Error resetting budgets: {str(e)}")
+        raise Exception(f"Error resetting budgets: {str(e)}")
+
+
+async def get_complete_financial_state() -> Dict[str, Any]:
+    """
+    Get complete financial state for spending advice.
+    Includes budgets, debts, and patrimony.
+    
+    Returns:
+        Dict with complete financial state
+    """
+    try:
+        # Get all budgets
+        budget_categories = ["fixed_survival", "debt_offensive", "kepler_growth", "networking_life", "stupid_expenses"]
+        budgets_dict = {}
+        for cat in budget_categories:
+            try:
+                budget_status = await get_budget_status(cat)
+                budgets_dict[cat] = {
+                    "monthly_limit": budget_status.get("monthly_limit", 0),
+                    "current_spent": budget_status.get("current_spent", 0),
+                    "remaining": budget_status.get("remaining", 0)
+                }
+            except:
+                budgets_dict[cat] = {
+                    "monthly_limit": 0,
+                    "current_spent": 0,
+                    "remaining": 0
+                }
+        
+        # Get all debts
+        debts = await get_all_debts()
+        total_debt = sum(float(d.get("current_balance", 0) or 0) for d in debts)
+        
+        # Get patrimony
+        monthly_status = await calculate_monthly_patrimony()
+        patrimony_data = await get_patrimony()
+        patrimony_dict = {
+            "current_balance": float(patrimony_data.get("current_balance", 0) or 0) if patrimony_data else 0,
+            "remaining_this_month": monthly_status.get("remaining_this_month", 0)
+        }
+        
+        return {
+            "budgets": budgets_dict,
+            "debts": debts,
+            "total_debt": total_debt,
+            "patrimony": patrimony_dict
+        }
+    except Exception as e:
+        logger.error(f"Error getting complete financial state: {str(e)}")
+        raise Exception(f"Error getting complete financial state: {str(e)}")
+
+
 async def update_patrimony_end_of_month() -> Dict[str, Any]:
     """
     Update patrimony at the end of the month.
