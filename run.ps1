@@ -2,3 +2,4 @@
 & .\venv\Scripts\Activate.ps1
 uvicorn api.index:app --reload
 
+

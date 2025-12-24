@@ -10,12 +10,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Initialize OpenAI client
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise ValueError("OPENAI_API_KEY must be set in environment variables")
+# Initialize OpenAI client (lazy initialization)
+_client = None
 
-client = OpenAI(api_key=api_key)
+def get_openai_client():
+    """Get or create OpenAI client."""
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY must be set in environment variables")
+        _client = OpenAI(api_key=api_key)
+    return _client
 
 # Valid categories as per requirements
 VALID_CATEGORIES = [
@@ -68,6 +74,7 @@ Responde SOLO con un JSON válido en este formato:
 }"""
 
     try:
+        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -175,6 +182,7 @@ Estado del presupuesto:
 - Restante: {remaining:,.0f} COP"""
 
     try:
+        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
