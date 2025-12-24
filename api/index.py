@@ -198,8 +198,6 @@ async def webhook(request: Request):
         )
 
 
-# For Vercel serverless
-def handler(request):
-    """Vercel serverless handler."""
-    return app(request.scope, request.receive, request.send)
+# Vercel serverless - la app FastAPI se expone directamente
+# No se necesita handler personalizado, Vercel detecta 'app' automáticamente
 
