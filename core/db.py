@@ -4,10 +4,13 @@ Handles transactions and budget management.
 """
 import os
 import httpx
+import logging
 from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # Initialize Supabase client using REST API directly
 supabase_url = os.getenv("SUPABASE_URL")
@@ -19,22 +22,20 @@ if not supabase_url or not supabase_key:
 # Remove trailing slash if present
 supabase_url = supabase_url.rstrip('/')
 
-# Create HTTP client for Supabase REST API
-def get_supabase_client() -> httpx.Client:
-    """Create and return an HTTP client configured for Supabase."""
-    return httpx.Client(
-        base_url=f"{supabase_url}/rest/v1",
-        headers={
-            "apikey": supabase_key,
-            "Authorization": f"Bearer {supabase_key}",
-            "Content-Type": "application/json",
-            "Prefer": "return=representation"
-        },
-        timeout=30.0
-    )
+# Headers para Supabase
+def get_supabase_headers() -> Dict[str, str]:
+    """Get headers for Supabase API requests."""
+    if not supabase_key:
+        raise ValueError("SUPABASE_KEY is not set")
+    return {
+        "apikey": supabase_key,
+        "Authorization": f"Bearer {supabase_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
 
 
-def insert_transaction(amount: float, category: str, description: str) -> Dict[str, Any]:
+async def insert_transaction(amount: float, category: str, description: str) -> Dict[str, Any]:
     """
     Insert a new transaction into the database.
     
@@ -50,19 +51,37 @@ def insert_transaction(amount: float, category: str, description: str) -> Dict[s
         data = {
             "amount": float(amount),
             "category": category,
-            "description": description
+            "description": description if description else None
         }
-        with get_supabase_client() as client:
-            response = client.post("/transactions", json=data)
-            response.raise_for_status()
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/transactions"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=data, headers=headers)
+            
+            # Log error details for debugging
+            if response.status_code != 201:
+                error_detail = response.text
+                try:
+                    error_json = response.json()
+                    error_detail = str(error_json)
+                except:
+                    pass
+                logger.error(f"Supabase error {response.status_code}: {error_detail}. Headers sent: {list(headers.keys())}")
+                raise Exception(f"Supabase error {response.status_code}: {error_detail}. Request data: {data}")
+            
             result = response.json()
             # Supabase returns array, get first element
             return result[0] if isinstance(result, list) and result else result
+    except httpx.HTTPStatusError as e:
+        error_detail = e.response.text if e.response else str(e)
+        raise Exception(f"Error inserting transaction (HTTP {e.response.status_code if e.response else 'unknown'}): {error_detail}")
     except Exception as e:
         raise Exception(f"Error inserting transaction: {str(e)}")
 
 
-def get_budget(category: str) -> Optional[Dict[str, Any]]:
+async def get_budget(category: str) -> Optional[Dict[str, Any]]:
     """
     Get budget information for a specific category.
     
@@ -73,11 +92,12 @@ def get_budget(category: str) -> Optional[Dict[str, Any]]:
         Dict with budget data or None if not found
     """
     try:
-        with get_supabase_client() as client:
-            response = client.get(
-                "/budgets",
-                params={"category": f"eq.{category}"}
-            )
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/budgets"
+        params = {"category": f"eq.{category}"}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
             response.raise_for_status()
             result = response.json()
             if isinstance(result, list) and len(result) > 0:
@@ -87,7 +107,7 @@ def get_budget(category: str) -> Optional[Dict[str, Any]]:
         raise Exception(f"Error getting budget: {str(e)}")
 
 
-def update_budget_spent(category: str, amount: float) -> Dict[str, Any]:
+async def update_budget_spent(category: str, amount: float) -> Dict[str, Any]:
     """
     Update the current_spent amount for a budget category.
     This adds the amount to the existing current_spent.
@@ -101,7 +121,7 @@ def update_budget_spent(category: str, amount: float) -> Dict[str, Any]:
     """
     try:
         # First, get current budget
-        budget = get_budget(category)
+        budget = await get_budget(category)
         if not budget:
             raise Exception(f"Budget not found for category: {category}")
         
@@ -109,11 +129,13 @@ def update_budget_spent(category: str, amount: float) -> Dict[str, Any]:
         new_spent = float(current_spent) + float(amount)
         
         # Update the budget using PATCH
-        with get_supabase_client() as client:
-            response = client.patch(
-                f"/budgets?category=eq.{category}",
-                json={"current_spent": new_spent}
-            )
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/budgets"
+        params = {"category": f"eq.{category}"}
+        data = {"current_spent": new_spent}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(url, params=params, json=data, headers=headers)
             response.raise_for_status()
             result = response.json()
             # Supabase returns array, get first element
@@ -122,7 +144,7 @@ def update_budget_spent(category: str, amount: float) -> Dict[str, Any]:
         raise Exception(f"Error updating budget: {str(e)}")
 
 
-def get_budget_status(category: str) -> Dict[str, Any]:
+async def get_budget_status(category: str) -> Dict[str, Any]:
     """
     Get complete budget status including remaining amount.
     
@@ -136,7 +158,7 @@ def get_budget_status(category: str) -> Dict[str, Any]:
         - remaining
     """
     try:
-        budget = get_budget(category)
+        budget = await get_budget(category)
         if not budget:
             raise Exception(f"Budget not found for category: {category}")
         

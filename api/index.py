@@ -107,7 +107,7 @@ async def webhook(request: Request):
         elif action == "check_budget":
             # User wants to check budget
             if category:
-                budget_status = get_budget_status(category)
+                budget_status = await get_budget_status(category)
                 response_text = generate_response(
                     action=action,
                     amount=0,
@@ -121,7 +121,7 @@ async def webhook(request: Request):
         elif action == "income":
             # Handle income
             try:
-                insert_transaction(amount=amount, category="income", description=description)
+                await insert_transaction(amount=amount, category="income", description=description)
                 response_text = generate_response(
                     action=action,
                     amount=amount,
@@ -142,17 +142,17 @@ async def webhook(request: Request):
             else:
                 try:
                     # Step 3: Insert transaction
-                    insert_transaction(
+                    await insert_transaction(
                         amount=amount,
                         category=category,
                         description=description
                     )
                     
                     # Step 4: Update budget
-                    update_budget_spent(category=category, amount=amount)
+                    await update_budget_spent(category=category, amount=amount)
                     
                     # Step 5: Get budget status
-                    budget_status = get_budget_status(category)
+                    budget_status = await get_budget_status(category)
                     
                     # Step 6: Generate response
                     response_text = generate_response(
