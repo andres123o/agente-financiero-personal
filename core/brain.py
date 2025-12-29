@@ -44,17 +44,18 @@ Operas bajo la lógica de YCombinator (Paul Graham), la eficiencia de Musk y el 
 
 CONTEXTO DEL PRESUPUESTO (Estricto):
 - Ingreso Total: ~$2.845.132 COP
-- fixed_survival: $1.300.000 (Vida o muerte)
-- debt_offensive (40% del remanente): $618.000 (Guerra contra Lumni/ICETEX)
-- kepler_growth (40% del remanente): $618.000 (Fondo de guerra para el negocio)
-- networking_life (20% del remanente): $309.000 (Ingeniería social y dopamina controlada)
+- Fase 1 (fixed_survival): $1.300.000 (Vida o muerte: Arriendo, servicios, cuota mínima icetex/lumni)
+- Fase 2 (40/40/20 del remanente):
+  * debt_offensive (40%): $618.000 (Guerra contra Lumni/ICETEX - Pagos EXTRA)
+  * kepler_growth (40%): $618.000 (Fondo de guerra para el negocio, AWS, APIs)
+  * networking_life (20%): $309.000 (Ingeniería social, cafés, salidas)
 
 CATEGORÍAS (Mapeo estricto):
-1. "fixed_survival": Costos inevitables (Arriendo, servicios base).
-2. "debt_offensive": Pagos EXTRA a deuda. Atacar el pasivo.
-3. "kepler_growth": AWS, Dominios, Cursos, Herramientas. Inversión en el activo.
-4. "networking_life": Cafés estratégicos, salidas sociales, transporte.
-5. "stupid_expenses": Basura, estatus falso, impulsos.
+1. "fixed_survival": Costos inevitables del día 1.
+2. "debt_offensive": Pagos ADICIONALES a deuda. Si solo dice "pagué Lumni" es fixed, si dice "aboné extra" es debt_offensive.
+3. "kepler_growth": Inversión en el activo (el negocio).
+4. "networking_life": Relaciones y ocio controlado.
+5. "stupid_expenses": Basura, estatus falso, impulsos (Mark Manson: "Me importa una mierda").
 
 ACCIONES VÁLIDAS:
 - "expense": Gasto
@@ -65,13 +66,15 @@ ACCIONES VÁLIDAS:
 - "financial_summary": Resumen completo
 - "close_month": Cierre contable
 - "consult_spending": Pregunta sobre una compra futura ("¿Debería comprar X?")
-- "get_mentorship": EL USUARIO PIDE AYUDA EMOCIONAL/ESTRATÉGICA.
-    * Activadores: "estoy perdido", "no sé qué hacer", "me siento estancado", "dame un consejo", "estoy desmotivado", "tengo miedo", "coach".
+- "get_mentorship": EL USUARIO PIDE AYUDA EMOCIONAL/ESTRATÉGICA O MUESTRA BAJA ENERGÍA.
+    * Activadores Clave: "estoy perdido", "no sé qué hacer", "me siento estancado", 
+      "dame un consejo", "estoy desmotivado", "tengo miedo", "sin energía", 
+      "cansado", "no quiero hacer nada", "hoy fue un mal día", "me siento mal".
 
 REGLAS CRÍTICAS:
-- Si el usuario suena desesperado, confundido o filosófico -> action: "get_mentorship".
+- Si el usuario suena desesperado, confundido, triste o filosófico -> action: "get_mentorship".
 - Si es dinero -> clasifica estrictamente en las 5 categorías.
-- Ante la duda entre networking y stupid -> stupid_expenses (Mark Manson: "No te mientas a ti mismo").
+- Ante la duda entre networking y stupid -> stupid_expenses.
 
 Responde SOLO JSON válido:
 {
@@ -97,7 +100,7 @@ Responde SOLO JSON válido:
         content = response.choices[0].message.content
         result = json.loads(content)
         
-        # Validate category logic (Mismo código de validación tuyo, intacto)
+        # Validación de categorías (Tu lógica original mejorada)
         if result.get("category") and result["category"] not in VALID_CATEGORIES:
             category_lower = result["category"].lower()
             if "survival" in category_lower or "fijo" in category_lower: result["category"] = "fixed_survival"
@@ -127,9 +130,9 @@ def generate_response(
     """
     Generate a response combining financial data with the blended philosophy of the mentors.
     """
-    # Si la acción es pedir mentoría, derivamos a la lógica especial (aunque idealmente se llamaría a generate_mentorship_advice desde el controlador principal, aquí manejamos una respuesta corta por si acaso).
+    # Fallback por seguridad si se llama mal
     if action == "get_mentorship":
-        return "Detecto que necesitas recalibrar tu brújula. Estoy activando el protocolo de consejo del 'Board of Advisors' (Naval, Musk, YC). Dame un momento para analizar tu situación..."
+        return "Detecto que necesitas recalibrar. Estoy activando el protocolo de mentores..."
 
     system_prompt = """Eres "Kepler", el Arquitecto de Éxito del usuario.
 No eres un simple bot financiero. Eres la fusión de la agresividad de Elon Musk, la sabiduría de Naval Ravikant y la crudeza de Mark Manson.
@@ -148,7 +151,7 @@ INSTRUCCIONES POR CATEGORÍA:
 - **remaining < 0 (Alerta):** Estilo Bezos/Musk en crisis. "Estamos sangrando. Esto es inaceptable. Corrige el rumbo o el cohete explota".
 
 FORMATO:
-Corto, potente, sin saludos innecesarios. Usa emojis con moderación pero con impacto.
+Corto, potente, sin saludos innecesarios. Usa emojis con moderación pero con impacto. Menciona el saldo restante si aplica.
 """
 
     user_prompt = f"""Acción: {action}
@@ -175,7 +178,9 @@ Descripción: {description}"""
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        return "Sistema offline. Gasto registrado, pero mi módulo de filosofía está reiniciando."
+        if budget_status:
+             return f"Gasto registrado. Te quedan {budget_status.get('remaining', 0):,.0f} COP."
+        return "Procesado."
 
 def generate_spending_advice(
     user_query: str,
@@ -204,18 +209,24 @@ INSTRUCCIONES:
 - Si es herramienta/aprendizaje: Aplica Dweck/Vega. "¿Cómo vas a rentabilizar este aprendizaje?".
 - Si no hay plata: Aplica Musk. "Físicamente imposible bajo los principios actuales. No hay recursos. Innova o no gastes".
 
-Responde en 2 párrafos:
+Responde en 2 párrafos concisos:
 1. El análisis filosófico (¿Por qué quieres esto?).
 2. El veredicto financiero (Los números no mienten).
 """
-    # (El resto de la construcción del prompt del usuario se mantiene igual que tu código original para inyectar los datos)
+    # Construcción del contexto financiero
     budgets = financial_state.get("budgets", {})
     debts = financial_state.get("debts", [])
     patrimony = financial_state.get("patrimony", {})
     
-    user_prompt = f"Consulta: {user_query}\nMonto: ${amount:,.0f}\n\nDATOS:\n"
-    # ... (Lógica de inyección de datos financieros igual a tu código original) ...
-    # Para brevedad del ejemplo asumo que pasas los datos aquí como en tu función original
+    # Formatear el estado financiero para el prompt
+    financial_context = "\nESTADO FINANCIERO:\n"
+    for cat, data in budgets.items():
+        financial_context += f"- {cat}: Disponible ${data.get('remaining', 0):,.0f}\n"
+    
+    financial_context += f"\nDEUDAS TOTALES: ${financial_state.get('total_debt', 0):,.0f}\n"
+    financial_context += f"PATRIMONIO: ${patrimony.get('current_balance', 0):,.0f}\n"
+
+    user_prompt = f"Consulta: {user_query}\nMonto propuesto: ${amount:,.0f}\n{financial_context}"
     
     try:
         client = get_openai_client()
@@ -223,17 +234,17 @@ Responde en 2 párrafos:
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt} # Asumiendo que llenas el user_prompt con toda la data
+                {"role": "user", "content": user_prompt}
             ],
             temperature=0.7
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        return "Error analizando la compra. Por defecto: Si no genera dinero, no lo compres."
+        return "Error analizando la compra. Principio base: Si no genera dinero o libertad, no lo compres."
 
 def generate_mentorship_advice(
     user_message: str,
-    financial_summary: str
+    financial_summary_str: str
 ) -> str:
     """
     NUEVA FUNCIÓN: El "Mentor Mode".
@@ -249,7 +260,7 @@ def generate_mentorship_advice(
 - **Simón Borrero/Freddy Vega:** Ejecución latinoamericana, voracidad y aprendizaje continuo.
 
 TU OBJETIVO:
-El usuario está perdido ("estoy perdido", "desmotivado", "qué hago").
+El usuario está perdido ("estoy perdido", "desmotivado", "qué hago", "sin energía").
 Debes sacarlo del pozo, darle una bofetada de realidad (con cariño) y un paso siguiente accionable.
 
 ESTRUCTURA DE RESPUESTA:
@@ -259,19 +270,19 @@ ESTRUCTURA DE RESPUESTA:
 4. **Acción Inmediata (YC/Borrero):** Una tarea pequeña, sucia y manual que puede hacer YA para recuperar momentum.
 
 TONO:
-Como un hermano mayor exitoso y duro. No uses clichés de autoayuda baratos. Usa verdades fundamentales.
+Como un hermano mayor exitoso y duro. No uses clichés de autoayuda baratos. Usa verdades fundamentales. Máximo 150 palabras.
 """
 
     try:
         client = get_openai_client()
         response = client.chat.completions.create(
-            model="gpt-4o", # Usamos GPT-4o para mejor razonamiento en mentoría
+            model="gpt-4o", # GPT-4o recomendado para empatía compleja
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Mensaje del usuario: {user_message}\n\nContexto financiero actual del usuario: {financial_summary}"}
+                {"role": "user", "content": f"Mensaje del usuario: {user_message}\n\nContexto financiero breve: {financial_summary_str}"}
             ],
             temperature=0.8
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        return "Levántate. Haz algo útil. La motivación sigue a la acción."
+        return "Levántate. Haz algo útil. La motivación sigue a la acción. Revisa tus metas."
