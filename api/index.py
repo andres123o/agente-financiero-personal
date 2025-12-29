@@ -142,19 +142,9 @@ async def webhook(request: Request):
         
         # Step 2: Route to appropriate layer
         if intent == "MENTORSHIP":
-            # Route to Mentorship Layer
+            # Route to Mentorship Layer - 100% mentoria, sin contexto financiero
             try:
-                # Get financial context for mentorship advice
-                try:
-                    debts = await get_all_debts()
-                    total_debt = sum(float(d.get("current_balance", 0) or 0) for d in debts)
-                    patrimony = await get_patrimony()
-                    current_patrimony = float(patrimony.get("current_balance", 0) or 0) if patrimony else 0
-                    context_str = f"Deuda total: ${total_debt:,.0f} COP. Patrimonio: ${current_patrimony:,.0f} COP. Presupuesto ajustado."
-                except:
-                    context_str = "Usuario Emprendedor"
-                
-                response_text = generate_mentorship_advice(user_text, context_str)
+                response_text = generate_mentorship_advice(user_text)
             except Exception as e:
                 logger.error(f"Error generating mentorship advice: {str(e)}")
                 response_text = f"Error procesando tu mensaje: {str(e)}"
