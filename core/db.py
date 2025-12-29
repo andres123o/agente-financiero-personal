@@ -468,9 +468,15 @@ async def update_patrimony_end_of_month(remaining: Optional[float] = None) -> Di
         # Don't allow negative patrimony (or allow it, depending on business logic)
         # For now, we'll allow it to go negative if expenses exceed patrimony
         
-        # Update patrimony
+        # Update patrimony using the ID from the patrimony record
         headers = get_supabase_headers()
+        patrimony_id = patrimony.get("id")
+        if not patrimony_id:
+            raise Exception("Patrimony record has no ID")
+        
         url = f"{supabase_url}/rest/v1/patrimony"
+        # Use ID filter for PATCH (Supabase requires a filter for PATCH operations)
+        params = {"id": f"eq.{patrimony_id}"}
         data = {
             "current_balance": new_balance,
             "last_month_income": monthly_status.get("monthly_income", 0),
@@ -478,7 +484,7 @@ async def update_patrimony_end_of_month(remaining: Optional[float] = None) -> Di
         }
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.patch(url, json=data, headers=headers)
+            response = await client.patch(url, params=params, json=data, headers=headers)
             response.raise_for_status()
             result = response.json()
             return result[0] if isinstance(result, list) and result else result
