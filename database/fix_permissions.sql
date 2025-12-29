@@ -50,3 +50,4 @@ WHERE table_schema = 'public'
 AND table_name = 'budgets'
 ORDER BY ordinal_position;
 
+

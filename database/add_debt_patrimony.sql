@@ -132,3 +132,4 @@ SELECT 'patrimony table', COUNT(*) FROM patrimony;
 SELECT * FROM debts;
 SELECT * FROM patrimony;
 
+

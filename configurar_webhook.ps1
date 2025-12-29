@@ -55,3 +55,4 @@ if (Test-Path $envFile) {
     Write-Host "❌ No se encontró el archivo .env" -ForegroundColor Red
 }
 
+
