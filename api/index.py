@@ -354,30 +354,41 @@ async def webhook(request: Request):
                     monthly_status = await calculate_monthly_patrimony()
                     remaining = monthly_status.get("remaining_this_month", 0)
                     
-                    if remaining <= 0:
-                        response_text = f"⚠️ Este mes gastaste más de lo que ingresaste. Diferencia: ${abs(remaining):,.0f} COP. No se puede sumar al patrimonio."
-                        # Reset budgets anyway even if negative balance
-                        try:
-                            await reset_all_budgets()
-                            response_text += "\n\n✅ Presupuestos reseteados para el nuevo mes."
-                        except Exception as e:
-                            logger.warning(f"Could not reset budgets: {str(e)}")
-                            response_text += "\n\n⚠️ No se pudieron resetear los presupuestos."
-                    else:
-                        patrimony_before = await get_patrimony()
-                        patrimony_before_balance = float(patrimony_before.get("current_balance", 0) or 0) if patrimony_before else 0
-                        
-                        updated_patrimony = await update_patrimony_end_of_month()
-                        patrimony_after_balance = float(updated_patrimony.get("current_balance", 0) or 0)
-                        
-                        # Reset all budgets for the new month
+                    # Get patrimony before update
+                    patrimony_before = await get_patrimony()
+                    patrimony_before_balance = float(patrimony_before.get("current_balance", 0) or 0) if patrimony_before else 0
+                    
+                    # Update patrimony (will add if positive, subtract if negative)
+                    updated_patrimony = await update_patrimony_end_of_month(remaining=remaining)
+                    patrimony_after_balance = float(updated_patrimony.get("current_balance", 0) or 0)
+                    
+                    # Reset all budgets for the new month
+                    try:
                         await reset_all_budgets()
-                        
+                        budgets_reset = True
+                    except Exception as e:
+                        logger.error(f"Could not reset budgets: {str(e)}")
+                        budgets_reset = False
+                    
+                    # Build response message
+                    if remaining <= 0:
+                        response_text = f"⚠️ MES CERRADO (GASTO EXCESIVO)\n\n"
+                        response_text += f"Este mes gastaste más de lo que ingresaste.\n"
+                        response_text += f"Diferencia negativa: ${abs(remaining):,.0f} COP\n\n"
+                        response_text += f"Patrimonio antes: ${patrimony_before_balance:,.0f} COP\n"
+                        response_text += f"Se restó del patrimonio: ${abs(remaining):,.0f} COP\n"
+                        response_text += f"Patrimonio ahora: ${patrimony_after_balance:,.0f} COP\n\n"
+                    else:
                         response_text = f"✅ MES CERRADO\n\n"
                         response_text += f"Patrimonio antes: ${patrimony_before_balance:,.0f} COP\n"
                         response_text += f"Lo que quedó este mes: ${remaining:,.0f} COP\n"
                         response_text += f"Patrimonio ahora: ${patrimony_after_balance:,.0f} COP\n\n"
+                    
+                    if budgets_reset:
                         response_text += f"✅ Presupuestos reseteados a cero para el nuevo mes."
+                    else:
+                        response_text += f"⚠️ No se pudieron resetear los presupuestos. Intenta de nuevo."
+                        
                 except Exception as e:
                     logger.error(f"Error closing month: {str(e)}")
                     response_text = f"Error cerrando el mes: {str(e)}"

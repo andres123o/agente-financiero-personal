@@ -366,14 +366,21 @@ async def reset_all_budgets() -> bool:
         True if successful, False otherwise
     """
     try:
+        # Update each budget category individually
+        budget_categories = ["fixed_survival", "debt_offensive", "kepler_growth", "networking_life", "stupid_expenses"]
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/budgets"
-        data = {"current_spent": 0}
         
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # Update all budgets to reset current_spent
-            response = await client.patch(url, json=data, headers=headers)
-            response.raise_for_status()
+            for category in budget_categories:
+                try:
+                    params = {"category": f"eq.{category}"}
+                    data = {"current_spent": 0}
+                    response = await client.patch(url, params=params, json=data, headers=headers)
+                    response.raise_for_status()
+                except Exception as e:
+                    logger.warning(f"Could not reset budget for {category}: {str(e)}")
+                    # Continue with other categories even if one fails
             return True
     except Exception as e:
         logger.error(f"Error resetting budgets: {str(e)}")
@@ -430,19 +437,25 @@ async def get_complete_financial_state() -> Dict[str, Any]:
         raise Exception(f"Error getting complete financial state: {str(e)}")
 
 
-async def update_patrimony_end_of_month() -> Dict[str, Any]:
+async def update_patrimony_end_of_month(remaining: Optional[float] = None) -> Dict[str, Any]:
     """
     Update patrimony at the end of the month.
-    Adds the remaining amount (income - expenses) to the accumulated patrimony.
+    Adds (or subtracts if negative) the remaining amount (income - expenses) to the accumulated patrimony.
     This should be called manually or via a command at month end.
+    
+    Args:
+        remaining: Optional remaining amount. If not provided, will calculate it.
     
     Returns:
         Updated patrimony dictionary
     """
     try:
-        # Calculate what's left this month
-        monthly_status = await calculate_monthly_patrimony()
-        remaining = monthly_status.get("remaining_this_month", 0)
+        # Calculate what's left this month if not provided
+        if remaining is None:
+            monthly_status = await calculate_monthly_patrimony()
+            remaining = monthly_status.get("remaining_this_month", 0)
+        else:
+            monthly_status = await calculate_monthly_patrimony()
         
         # Get current patrimony
         patrimony = await get_patrimony()
@@ -450,7 +463,10 @@ async def update_patrimony_end_of_month() -> Dict[str, Any]:
             raise Exception("Patrimony record not found")
         
         current_balance = float(patrimony.get("current_balance", 0) or 0)
+        # Add remaining (can be negative, which will subtract)
         new_balance = current_balance + remaining
+        # Don't allow negative patrimony (or allow it, depending on business logic)
+        # For now, we'll allow it to go negative if expenses exceed patrimony
         
         # Update patrimony
         headers = get_supabase_headers()
