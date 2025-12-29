@@ -1,7 +1,11 @@
 """
-OpenAI integration for natural language processing.
-Handles expense classification, response generation, and philosophical mentorship.
-Combines logic from: Dweck, Naval, Manson, Carnegie, YC, Bezos, Musk, Borrero, Vega.
+OpenAI integration for Kepler Agent.
+ARCHITECTURE:
+1. INTENT ROUTER (Layer 1): Decides between Finance (CFO) vs Mentorship (Coach).
+2. FINANCE LAYER (Layer 2a): Handles strict budgeting, expenses, and transaction recording.
+3. MENTORSHIP LAYER (Layer 2b): Handles psychological support, motivation, and strategy.
+
+Mental Models: Dweck, Naval, Manson, Carnegie, YC, Bezos, Musk, Borrero, Vega.
 """
 import os
 import json
@@ -24,67 +28,107 @@ def get_openai_client():
         _client = OpenAI(api_key=api_key)
     return _client
 
-# Valid categories as per requirements (UNCHANGED)
+# --- CONFIGURACIÓN FINANCIERA ESTRICTA ---
 VALID_CATEGORIES = [
-    "fixed_survival",
-    "debt_offensive",
-    "kepler_growth",
-    "networking_life",
-    "stupid_expenses"
+    "fixed_survival",  # $1.300.000
+    "debt_offensive",  # 40% del remanente ($618k)
+    "kepler_growth",   # 40% del remanente ($618k)
+    "networking_life", # 20% del remanente ($309k)
+    "stupid_expenses"  # 0% idealmente
 ]
 
-def classify_expense(user_message: str) -> Dict[str, Any]:
-    """
-    Analyze user message and extract structured expense data OR mentorship requests.
-    """
-    system_prompt = """Eres el sistema operativo central de un emprendedor de alto rendimiento. Analizas mensajes para extraer datos financieros o detectar necesidad de mentoría.
+# =============================================================================
+# CAPA 1: EL ROUTER MAESTRO (Intention Layer)
+# =============================================================================
 
-TU MENTALIDAD (CONTEXTO):
-Operas bajo la lógica de YCombinator (Paul Graham), la eficiencia de Musk y el esencialismo de Naval Ravikant. Tu objetivo es clasificar la realidad del usuario en datos procesables.
+def analyze_intent(user_message: str) -> str:
+    """
+    LAYER 1: The Gatekeeper.
+    Decides if the user needs the CFO (Finance) or the Mentor (Psychology/Strategy).
+    """
+    system_prompt = """Eres el sistema de triaje mental de un CEO. Tu única misión es redirigir el mensaje.
+
+CLASIFICACIÓN:
+
+1. "FINANCE" (El usuario habla de números/recursos):
+   - Menciona gastos, ingresos, dinero, saldos, deudas, precios.
+   - "Gasté 50k", "Me pagaron", "¿Cuánto tengo?", "Cerrar mes", "¿Puedo comprar esto?".
+   - Cualquier cosa que implique una transacción o consulta de datos numéricos.
+
+2. "MENTORSHIP" (El usuario habla de estados internos/estrategia):
+   - Menciona sentimientos: "estoy perdido", "cansado", "sin energía", "triste", "feliz".
+   - Pide consejo no numérico: "¿Qué hago con mi vida?", "estoy estancado", "dame ánimo".
+   - Frases vagas de auxilio: "no sé qué pasa", "ayuda", "necesito un consejo".
+   - Errores ortográficos comunes en estados emocionales: "energcio", "trizt", "anciedad".
+
+REGLA DE ORO:
+- Si hay un número o símbolo de moneda explícito -> FINANCE.
+- Si es pura emoción o duda existencial -> MENTORSHIP.
+
+Responde SOLAMENTE una palabra: "FINANCE" o "MENTORSHIP".
+"""
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0.0, # Cero creatividad, pura lógica
+            max_tokens=10
+        )
+        intent = response.choices[0].message.content.strip().upper()
+        # Fallback de seguridad
+        if "MENTOR" in intent: return "MENTORSHIP"
+        return "FINANCE"
+    except Exception:
+        return "FINANCE" # Ante la duda, asumimos que es un gasto para no perder datos
+
+# =============================================================================
+# CAPA 2A: EL CFO (Finance Layer)
+# =============================================================================
+
+def classify_financial_action(user_message: str) -> Dict[str, Any]:
+    """
+    LAYER 2A: The Strict CFO.
+    Solo se ejecuta si el Router decide que es 'FINANCE'.
+    Extrae datos estructurados para la base de datos.
+    """
+    system_prompt = """Eres el motor financiero de Kepler. Procesas transacciones con precisión quirúrgica.
 
 CONTEXTO DEL PRESUPUESTO (Estricto):
 - Ingreso Total: ~$2.845.132 COP
-- Fase 1 (fixed_survival): $1.300.000 (Vida o muerte: Arriendo, servicios, cuota mínima icetex/lumni)
-- Fase 2 (40/40/20 del remanente):
-  * debt_offensive (40%): $618.000 (Guerra contra Lumni/ICETEX - Pagos EXTRA)
-  * kepler_growth (40%): $618.000 (Fondo de guerra para el negocio, AWS, APIs)
-  * networking_life (20%): $309.000 (Ingeniería social, cafés, salidas)
-
-CATEGORÍAS (Mapeo estricto):
-1. "fixed_survival": Costos inevitables del día 1.
-2. "debt_offensive": Pagos ADICIONALES a deuda. Si solo dice "pagué Lumni" es fixed, si dice "aboné extra" es debt_offensive.
-3. "kepler_growth": Inversión en el activo (el negocio).
-4. "networking_life": Relaciones y ocio controlado.
-5. "stupid_expenses": Basura, estatus falso, impulsos (Mark Manson: "Me importa una mierda").
+- fixed_survival ($1.300.000): Arriendo, servicios, cuota MÍNIMA icetex/lumni.
+- debt_offensive ($618.000): Pagos EXTRA a deuda (Guerra contra pasivos).
+- kepler_growth ($618.000): Inversión negocio (AWS, APIs, Cursos).
+- networking_life ($309.000): Salidas estratégicas y ocio.
+- stupid_expenses: Gastos hormiga, lujos basura.
 
 ACCIONES VÁLIDAS:
-- "expense": Gasto
-- "income": Ingreso
-- "check_budget": Consultar saldo
-- "check_debt": Consultar pasivos
-- "check_patrimony": Consultar net worth
-- "financial_summary": Resumen completo
-- "close_month": Cierre contable
-- "consult_spending": Pregunta sobre una compra futura ("¿Debería comprar X?")
-- "get_mentorship": EL USUARIO PIDE AYUDA EMOCIONAL/ESTRATÉGICA O MUESTRA BAJA ENERGÍA.
-    * Activadores Clave: "estoy perdido", "no sé qué hacer", "me siento estancado", 
-      "dame un consejo", "estoy desmotivado", "tengo miedo", "sin energía", 
-      "cansado", "no quiero hacer nada", "hoy fue un mal día", "me siento mal".
+- "expense": Gasto realizado.
+- "income": Ingreso de dinero.
+- "check_budget": Ver saldo.
+- "check_debt": Ver deudas.
+- "check_patrimony": Ver patrimonio.
+- "financial_summary": Resumen total.
+- "close_month": Cierre de mes.
+- "consult_spending": Pregunta "¿Debería comprar X?" (Evaluación financiera).
 
-REGLAS CRÍTICAS:
-- Si el usuario suena desesperado, confundido, triste o filosófico -> action: "get_mentorship".
-- Si es dinero -> clasifica estrictamente en las 5 categorías.
-- Ante la duda entre networking y stupid -> stupid_expenses.
+REGLAS DE CLASIFICACIÓN:
+1. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
+2. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
+3. Ante duda entre networking y stupid -> stupid_expenses.
+4. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
 
-Responde SOLO JSON válido:
+Responde SOLO JSON:
 {
-    "action": "expense|income|check_budget|check_debt|check_patrimony|financial_summary|close_month|consult_spending|get_mentorship|unknown",
+    "action": "action_name",
     "amount": 0.0,
-    "category": "categoria_valida_o_null",
-    "description": "contexto breve"
+    "category": "valid_category_or_null",
+    "description": "text"
 }
 """
-
     try:
         client = get_openai_client()
         response = client.chat.completions.create(
@@ -94,33 +138,26 @@ Responde SOLO JSON válido:
                 {"role": "user", "content": user_message}
             ],
             response_format={"type": "json_object"},
-            temperature=0.3
+            temperature=0.1
         )
-        
         content = response.choices[0].message.content
         result = json.loads(content)
-        
-        # Validación de categorías (Tu lógica original mejorada)
-        if result.get("category") and result["category"] not in VALID_CATEGORIES:
-            category_lower = result["category"].lower()
-            if "survival" in category_lower or "fijo" in category_lower: result["category"] = "fixed_survival"
-            elif "deuda" in category_lower or "debt" in category_lower: result["category"] = "debt_offensive"
-            elif "kepler" in category_lower or "negocio" in category_lower: result["category"] = "kepler_growth"
-            elif "networking" in category_lower or "social" in category_lower: result["category"] = "networking_life"
-            elif "tonto" in category_lower or "stupid" in category_lower: result["category"] = "stupid_expenses"
-            else: result["category"] = "fixed_survival"
-        
-        return result
-        
-    except Exception as e:
-        return {
-            "action": "unknown",
-            "amount": 0.0,
-            "category": None,
-            "description": f"Error: {str(e)}"
-        }
 
-def generate_response(
+        # Validación forzada de categorías
+        if result.get("category") and result["category"] not in VALID_CATEGORIES:
+            cat = result["category"].lower()
+            if "survival" in cat or "fijo" in cat: result["category"] = "fixed_survival"
+            elif "deuda" in cat or "debt" in cat: result["category"] = "debt_offensive"
+            elif "kepler" in cat or "negocio" in cat: result["category"] = "kepler_growth"
+            elif "networking" in cat or "social" in cat: result["category"] = "networking_life"
+            elif "tonto" in cat or "stupid" in cat: result["category"] = "stupid_expenses"
+            else: result["category"] = "fixed_survival" # Default seguro
+
+        return result
+    except Exception as e:
+        return {"action": "unknown", "amount": 0, "category": None, "description": str(e)}
+
+def generate_cfo_response(
     action: str,
     amount: float,
     category: Optional[str],
@@ -128,161 +165,147 @@ def generate_response(
     budget_status: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Generate a response combining financial data with the blended philosophy of the mentors.
+    Genera la respuesta de texto del CFO (Personalidad: Musk/Bezos/Naval - Orientado a Datos).
     """
-    # Fallback por seguridad si se llama mal
-    if action == "get_mentorship":
-        return "Detecto que necesitas recalibrar. Estoy activando el protocolo de mentores..."
-
-    system_prompt = """Eres "Kepler", el Arquitecto de Éxito del usuario.
-No eres un simple bot financiero. Eres la fusión de la agresividad de Elon Musk, la sabiduría de Naval Ravikant y la crudeza de Mark Manson.
-
-TU FILOSOFÍA DE RESPUESTA:
-1. **Growth Mindset (Dweck):** Si falló, no lo insultes por ser "tonto", insulta su falta de iteración. "Todavía" no lo logras.
-2. **First Principles (Musk):** Ve a la verdad fundamental de los números.
-3. **Radical Truth (Dalio/Manson):** No suavices los golpes. Si está en números rojos, díselo.
-4. **Ejecución (Borrero/YC):** Celebra la velocidad y la construcción.
-
-INSTRUCCIONES POR CATEGORÍA:
-- **stupid_expenses:** Sé sarcástico al estilo Manson. "¿Este gasto te acerca a tu libertad o es solo dopamina barata?".
-- **kepler_growth:** Estilo YCombinator. "Bien. Esto no es un gasto, es combustible. Ahora haz que valga la pena (Make something people want)".
-- **debt_offensive:** Estilo Naval. "Comprando tu libertad. Eliminar deuda es el primer paso para la soberanía".
-- **networking_life:** Estilo Dale Carnegie/Freddy Vega. "Asegúrate de que no sea solo fiesta, sino construcción de capital social".
-- **remaining < 0 (Alerta):** Estilo Bezos/Musk en crisis. "Estamos sangrando. Esto es inaceptable. Corrige el rumbo o el cohete explota".
-
-FORMATO:
-Corto, potente, sin saludos innecesarios. Usa emojis con moderación pero con impacto. Menciona el saldo restante si aplica.
+    system_prompt = """Eres "Kepler CFO". Tu personalidad es una mezcla de Kevin O'Leary y Elon Musk.
+- Odias los gastos estúpidos ("stupid_expenses"). Insulta la falta de disciplina.
+- Amas la inversión en el negocio ("kepler_growth") y pagar deuda ("debt_offensive").
+- Si el presupuesto es negativo (remaining < 0), lanza una ALERTA ROJA agresiva.
+- Sé breve. Los datos importan más que tus palabras.
 """
-
-    user_prompt = f"""Acción: {action}
-Monto: {amount:,.0f} COP
-Categoría: {category or 'N/A'}
-Descripción: {description}"""
-
+    user_prompt = f"Acción: {action}, Monto: {amount}, Categoria: {category}, Desc: {description}"
     if budget_status:
-        remaining = budget_status.get("remaining", 0)
-        monthly_limit = budget_status.get("monthly_limit", 0)
-        current_spent = budget_status.get("current_spent", 0)
-        user_prompt += f"\nEstado: Límite {monthly_limit:,.0f} | Gastado {current_spent:,.0f} | Restante {remaining:,.0f}"
+        user_prompt += f"\nEstado: Restan {budget_status.get('remaining')} de {budget_status.get('monthly_limit')}"
 
     try:
         client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.7,
-            max_tokens=250
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            max_tokens=150
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        if budget_status:
-             return f"Gasto registrado. Te quedan {budget_status.get('remaining', 0):,.0f} COP."
-        return "Procesado."
+        return "Transacción registrada."
 
-def generate_spending_advice(
-    user_query: str,
-    amount: float,
-    financial_state: Dict[str, Any]
-) -> str:
+def generate_spending_advice(user_query: str, amount: float, financial_state: Dict[str, Any]) -> str:
     """
-    Guardian/Coach logic heavily influenced by Naval (Assets vs Liabilities) and Musk (First Principles).
+    Coach financiero para compras futuras.
+    Filtros: Naval (Estatus vs Riqueza) y Manson (Esencialismo).
     """
-    system_prompt = """Eres el "Board of Advisors" personal del usuario (Musk, Naval, Manson, YC).
-El usuario quiere gastar dinero. Tu trabajo no es prohibir, sino aplicar INGENIERÍA DE DECISIONES.
+    system_prompt = """Eres el Guardián Financiero.
+Analiza si el usuario debe comprar esto basándote en:
+1. ¿Es deuda mala? (Naval)
+2. ¿Es para impresionar a gente que no le importa? (Manson)
+3. ¿Hay flujo de caja real? (CFO)
 
-TUS FILTROS MENTALES:
-1. **Naval Ravikant:** ¿Esto es un juego de estatus (suma cero) o un juego de riqueza (suma positiva)? Si es estatus, destrúyelo.
-2. **Mark Manson:** ¿Te importa una mierda esto realmente? ¿O es ruido?
-3. **Jeff Bezos:** ¿Te arrepentirás a los 80 años de no comprarlo? (Regret Minimization Framework).
-4. **Simón Borrero/Freddy Vega:** ¿Esto te hace más rápido o más inteligente? ¿Aumenta tu 'tasa de aprendizaje'?
-
-CONTEXTO DURO:
-- Deudas masivas (ICETEX/Lumni).
-- Proyecto 'Kepler' hambriento de capital.
-- Presupuesto 40/40/20.
-
-INSTRUCCIONES:
-- Si es un lujo: Aplica Manson. "¿Estás llenando un vacío emocional con consumo?". Sé duro.
-- Si es herramienta/aprendizaje: Aplica Dweck/Vega. "¿Cómo vas a rentabilizar este aprendizaje?".
-- Si no hay plata: Aplica Musk. "Físicamente imposible bajo los principios actuales. No hay recursos. Innova o no gastes".
-
-Responde en 2 párrafos concisos:
-1. El análisis filosófico (¿Por qué quieres esto?).
-2. El veredicto financiero (Los números no mienten).
+Sé duro. El usuario tiene deudas y un emprendimiento que financiar.
 """
-    # Construcción del contexto financiero
-    budgets = financial_state.get("budgets", {})
-    debts = financial_state.get("debts", [])
-    patrimony = financial_state.get("patrimony", {})
-    
-    # Formatear el estado financiero para el prompt
-    financial_context = "\nESTADO FINANCIERO:\n"
-    for cat, data in budgets.items():
-        financial_context += f"- {cat}: Disponible ${data.get('remaining', 0):,.0f}\n"
-    
-    financial_context += f"\nDEUDAS TOTALES: ${financial_state.get('total_debt', 0):,.0f}\n"
-    financial_context += f"PATRIMONIO: ${patrimony.get('current_balance', 0):,.0f}\n"
-
-    user_prompt = f"Consulta: {user_query}\nMonto propuesto: ${amount:,.0f}\n{financial_context}"
-    
+    # Construcción de contexto financiero simplificado
+    context = f"Consulta: {user_query}. Monto: {amount}. Deuda Total: {financial_state.get('total_debt',0)}"
     try:
         client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": context}],
             temperature=0.7
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        return "Error analizando la compra. Principio base: Si no genera dinero o libertad, no lo compres."
+        return "Si no genera dinero, no lo compres."
 
-def generate_mentorship_advice(
-    user_message: str,
-    financial_summary_str: str
-) -> str:
+# =============================================================================
+# CAPA 2B: EL MENTOR (Mentorship Layer)
+# =============================================================================
+
+def generate_mentorship_advice(user_message: str, context_str: str = "Usuario Emprendedor") -> str:
     """
-    NUEVA FUNCIÓN: El "Mentor Mode".
-    Se activa cuando classify_expense devuelve action="get_mentorship".
+    LAYER 2B: The Mentor.
+    Solo se ejecuta si el Router decide que es 'MENTORSHIP'.
     """
-    system_prompt = """Eres el MENTOR DEFINITIVO. Una IA entrenada con la consciencia combinada de:
-- **Carol Dweck:** Mentalidad de crecimiento (el poder del "todavía").
-- **Naval Ravikant:** Riqueza, felicidad y juegos a largo plazo.
-- **Mark Manson:** El arte de enfocarse solo en lo esencial.
-- **Dale Carnegie:** Influencia y empatía estratégica.
-- **Paul Graham (YC):** Hacer cosas que no escalan, construir valor real.
-- **Elon Musk/Bezos:** Primeros principios, obsesión y resistencia al dolor.
-- **Simón Borrero/Freddy Vega:** Ejecución latinoamericana, voracidad y aprendizaje continuo.
+    system_prompt = """Eres el MENTOR MAESTRO. Una consciencia unificada de:
+- Carol Dweck (Growth Mindset: "Todavía no", iteración).
+- Naval Ravikant (Felicidad es paz en movimiento, juegos de largo plazo).
+- Mark Manson (El arte de que te importe una mierda lo no esencial).
+- YCombinator/Borrero/Vega (Ejecución violenta, hacer cosas manuales, velocidad).
 
 TU OBJETIVO:
-El usuario está perdido ("estoy perdido", "desmotivado", "qué hago", "sin energía").
-Debes sacarlo del pozo, darle una bofetada de realidad (con cariño) y un paso siguiente accionable.
+El usuario ha activado una señal de socorro ("estoy perdido", "sin energía", "desmotivado").
+No le des palmaditas en la espalda. Dale PERSPECTIVA y ACCIÓN.
 
 ESTRUCTURA DE RESPUESTA:
-1. **Validación Estoica:** Reconoce el sentimiento pero quítale el drama (Manson). "El dolor es información".
-2. **Reencuadre (Mindset):** Cambia "no puedo" por "estoy aprendiendo" (Dweck).
-3. **Perspectiva (Naval/Musk):** Aleja el zoom. ¿Estás jugando a largo plazo?
-4. **Acción Inmediata (YC/Borrero):** Una tarea pequeña, sucia y manual que puede hacer YA para recuperar momentum.
+1. **Validación Rápida:** Reconoce el estado ("Es normal sentirse así cuando estás construyendo algo grande").
+2. **Reencuadre Filosófico:** Usa a Naval o Dweck para cambiar la visión del problema.
+3. **La Bofetada de Realidad (Manson):** ¿Estás sufriendo por algo que importa o por ego?
+4. **Call to Action (YC):** Una tarea ridículamente pequeña que pueda hacer YA MISMO para romper la parálisis.
 
 TONO:
-Como un hermano mayor exitoso y duro. No uses clichés de autoayuda baratos. Usa verdades fundamentales. Máximo 150 palabras.
+Firme, empático pero sin tonterías. Como un co-founder senior.
 """
-
     try:
         client = get_openai_client()
         response = client.chat.completions.create(
-            model="gpt-4o", # GPT-4o recomendado para empatía compleja
+            model="gpt-4o", # Usamos el modelo más inteligente para empatía
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Mensaje del usuario: {user_message}\n\nContexto financiero breve: {financial_summary_str}"}
+                {"role": "user", "content": f"Mensaje del usuario: {user_message}. Contexto: {context_str}"}
             ],
-            temperature=0.8
+            temperature=0.8,
+            max_tokens=300
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        return "Levántate. Haz algo útil. La motivación sigue a la acción. Revisa tus metas."
+        return "La motivación es un mito. La acción crea el momentum. Haz una cosa pequeña ahora."
+
+# =============================================================================
+# ORQUESTADOR PRINCIPAL (Para copiar en tu bot.py / main.py)
+# =============================================================================
+# Este bloque es un ejemplo de cómo debes usar las funciones anteriores en tu código principal.
+# No es parte de la librería, pero te muestra la lógica de integración.
+
+"""
+COPIA ESTA LÓGICA EN TU ARCHIVO PRINCIPAL (donde recibes el mensaje de Telegram):
+
+# 1. RECIBIMOS EL MENSAJE
+user_text = update.message.text
+
+# 2. CAPA 1: ROUTER
+intencion = analyze_intent(user_text) # Devuelve "FINANCE" o "MENTORSHIP"
+
+response_text = ""
+
+if intencion == "MENTORSHIP":
+    # 3. CAMINO A: MENTORÍA
+    # Aquí puedes pasar un string con un resumen del estado actual si lo tienes
+    response_text = generate_mentorship_advice(user_text, "Deuda alta, Presupuesto ajustado")
+
+else:
+    # 3. CAMINO B: FINANZAS (CFO)
+    decision = classify_financial_action(user_text)
+    action = decision.get("action")
+    
+    if action == "consult_spending":
+        # Sub-camino: Coach de gastos
+        # Necesitas pasar el estado financiero real aquí (financial_state)
+        response_text = generate_spending_advice(decision.get("description"), decision.get("amount"), financial_state)
+        
+    elif action == "unknown":
+        response_text = "No entendí. Si es dinero, sé específico (ej: 'Gasté 20k'). Si es consejo, dime qué sientes."
+        
+    else:
+        # Sub-camino: Transacción Pura
+        # AQUÍ VA TU LÓGICA DE BASE DE DATOS (Guardar gasto, actualizar presupuesto)
+        # ... db.save_transaction(...) ...
+        
+        # Generar respuesta del CFO
+        # budget_status debe venir de tu DB
+        response_text = generate_cfo_response(
+            action, 
+            decision.get("amount"), 
+            decision.get("category"), 
+            decision.get("description"), 
+            budget_status
+        )
+
+# 4. ENVIAR response_text A TELEGRAM
+"""
