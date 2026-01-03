@@ -30,9 +30,9 @@ def get_openai_client():
 
 # --- CONFIGURACIÓN FINANCIERA ESTRICTA ---
 VALID_CATEGORIES = [
-    "fixed_survival",  # $1.300.000
-    "debt_offensive",  # 40% del remanente ($618k)
-    "kepler_growth",   # 40% del remanente ($618k)
+    "fixed_survival",  # $1.714.300
+    "debt_offensive",  # 40% del remanente ($412.850)
+    "kepler_growth",   # 40% del remanente ($412.850)
     "networking_life", # 20% del remanente ($309k)
     "stupid_expenses"  # 0% idealmente
 ]
@@ -99,9 +99,9 @@ def classify_financial_action(user_message: str) -> Dict[str, Any]:
 
 CONTEXTO DEL PRESUPUESTO (Estricto):
 - Ingreso Total: ~$2.845.132 COP
-- fixed_survival ($1.300.000): Arriendo, servicios, cuota MÍNIMA icetex/lumni.
-- debt_offensive ($618.000): Pagos EXTRA a deuda (Guerra contra pasivos).
-- kepler_growth ($618.000): Inversión negocio (AWS, APIs, Cursos).
+- fixed_survival ($1.714.300): Arriendo, servicios, seguridad social, cuota MÍNIMA icetex/lumni.
+- debt_offensive ($412.850): Pagos EXTRA a deuda (Guerra contra pasivos).
+- kepler_growth ($412.850): Inversión negocio (AWS, APIs, Cursos).
 - networking_life ($309.000): Salidas estratégicas y ocio.
 - stupid_expenses: Gastos hormiga, lujos basura.
 
