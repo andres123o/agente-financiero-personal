@@ -491,3 +491,77 @@ async def update_patrimony_end_of_month(remaining: Optional[float] = None) -> Di
     except Exception as e:
         raise Exception(f"Error updating patrimony end of month: {str(e)}")
 
+
+# ============================================
+# CONVERSATION HISTORY FUNCTIONS
+# ============================================
+
+async def save_conversation_message(chat_id: int, role: str, message: str, intent: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Save a conversation message to the history.
+    
+    Args:
+        chat_id: Telegram chat ID
+        role: 'user' or 'assistant'
+        message: Message text
+        intent: Optional intent ('FINANCE' or 'MENTORSHIP')
+        
+    Returns:
+        Dict with saved message data
+    """
+    try:
+        data = {
+            "chat_id": chat_id,
+            "role": role,
+            "message": message,
+            "intent": intent
+        }
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/conversation_history"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            return result[0] if isinstance(result, list) and result else result
+    except Exception as e:
+        raise Exception(f"Error saving conversation message: {str(e)}")
+
+
+async def get_conversation_history(chat_id: int, limit: int = 8) -> list[Dict[str, Any]]:
+    """
+    Get recent conversation history for a chat.
+    
+    Args:
+        chat_id: Telegram chat ID
+        limit: Number of recent messages to retrieve (default: 8, range: 6-9)
+        
+    Returns:
+        List of conversation messages (most recent first)
+    """
+    try:
+        # Ensure limit is between 6-9
+        limit = max(6, min(9, limit))
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/conversation_history"
+        params = {
+            "chat_id": f"eq.{chat_id}",
+            "order": "created_at.desc",
+            "limit": str(limit)
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Reverse to get chronological order (oldest first)
+            if isinstance(result, list):
+                return list(reversed(result))
+            return []
+    except Exception as e:
+        logger.error(f"Error getting conversation history: {str(e)}")
+        return []
+

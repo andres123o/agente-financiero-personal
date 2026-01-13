@@ -26,7 +26,9 @@ from core.db import (
     calculate_monthly_patrimony,
     update_patrimony_end_of_month,
     reset_all_budgets,
-    get_complete_financial_state
+    get_complete_financial_state,
+    save_conversation_message,
+    get_conversation_history
 )
 from core.telegram import send_message
 
@@ -133,18 +135,26 @@ async def webhook(request: Request):
                 "response": "Por favor, envía un mensaje de texto. Ejemplo: 'Gasté 50000 en comida'"
             })
         
-        # Step 1: Analyze intent (Router Layer)
+        # Step 1: Get conversation history (6-9 recent messages)
+        conversation_history = []
+        try:
+            conversation_history = await get_conversation_history(chat_id, limit=8)
+            logger.info(f"Retrieved {len(conversation_history)} messages from history")
+        except Exception as e:
+            logger.warning(f"Could not retrieve conversation history: {str(e)}")
+        
+        # Step 2: Analyze intent (Router Layer)
         logger.info(f"Analyzing intent for message: {user_text}")
         intent = analyze_intent(user_text)
         logger.info(f"Intent: {intent}")
         
         response_text = ""
         
-        # Step 2: Route to appropriate layer
+        # Step 3: Route to appropriate layer
         if intent == "MENTORSHIP":
             # Route to Mentorship Layer - 100% mentoria, sin contexto financiero
             try:
-                response_text = generate_mentorship_advice(user_text)
+                response_text = generate_mentorship_advice(user_text, conversation_history=conversation_history)
             except Exception as e:
                 logger.error(f"Error generating mentorship advice: {str(e)}")
                 response_text = f"Error procesando tu mensaje: {str(e)}"
@@ -177,7 +187,8 @@ async def webhook(request: Request):
                         amount=0,
                         category=category,
                         description="Consulta de presupuesto",
-                        budget_status=budget_status
+                        budget_status=budget_status,
+                        conversation_history=conversation_history
                     )
                 else:
                     response_text = "¿Qué categoría quieres consultar? (fixed_survival, debt_offensive, kepler_growth, networking_life, stupid_expenses)"
@@ -191,7 +202,8 @@ async def webhook(request: Request):
                         amount=amount,
                         category=None,
                         description=description,
-                        budget_status=None
+                        budget_status=None,
+                        conversation_history=conversation_history
                     )
                 except Exception as e:
                     logger.error(f"Error processing income: {str(e)}")
@@ -250,7 +262,8 @@ async def webhook(request: Request):
                             amount=amount,
                             category=category,
                             description=description,
-                            budget_status=budget_status
+                            budget_status=budget_status,
+                            conversation_history=conversation_history
                         )
                         
                     except Exception as e:
@@ -403,7 +416,8 @@ async def webhook(request: Request):
                     response_text = generate_spending_advice(
                         user_query=user_text,
                         amount=amount if amount > 0 else 0,
-                        financial_state=financial_state
+                        financial_state=financial_state,
+                        conversation_history=conversation_history
                     )
                 except Exception as e:
                     logger.error(f"Error generating spending advice: {str(e)}")
@@ -412,7 +426,14 @@ async def webhook(request: Request):
             else:
                 response_text = "Acción no reconocida. Por favor, intenta de nuevo."
         
-        # Step 7: Send response to Telegram
+        # Step 7: Save conversation messages to history
+        try:
+            await save_conversation_message(chat_id=chat_id, role="user", message=user_text, intent=intent)
+            await save_conversation_message(chat_id=chat_id, role="assistant", message=response_text, intent=intent)
+        except Exception as e:
+            logger.warning(f"Could not save conversation history: {str(e)}")
+        
+        # Step 8: Send response to Telegram
         if chat_id:
             try:
                 await send_message(chat_id=chat_id, text=response_text)
