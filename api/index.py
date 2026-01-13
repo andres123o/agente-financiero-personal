@@ -14,7 +14,8 @@ from core.brain import (
     classify_financial_action,
     generate_cfo_response,
     generate_spending_advice,
-    generate_mentorship_advice
+    generate_mentorship_advice,
+    generate_transaction_query_response
 )
 from core.db import (
     insert_transaction, 
@@ -28,7 +29,8 @@ from core.db import (
     reset_all_budgets,
     get_complete_financial_state,
     save_conversation_message,
-    get_conversation_history
+    get_conversation_history,
+    get_transactions
 )
 from core.telegram import send_message
 
@@ -320,42 +322,155 @@ async def webhook(request: Request):
             elif action == "financial_summary":
                 # User wants complete financial summary
                 try:
+                    from datetime import datetime
+                    
                     # Get debts
                     debts = await get_all_debts()
                     total_debt = sum(float(d.get("current_balance", 0) or 0) for d in debts)
+                    initial_debt_total = sum(float(d.get("initial_balance", 0) or 0) for d in debts)
+                    debt_paid = initial_debt_total - total_debt
                     
                     # Get patrimony
                     monthly_status = await calculate_monthly_patrimony()
                     patrimony = await get_patrimony()
                     current_patrimony = float(patrimony.get("current_balance", 0) or 0) if patrimony else 0
+                    initial_patrimony = float(patrimony.get("initial_balance", 0) or 0) if patrimony else 0
+                    patrimony_growth = current_patrimony - initial_patrimony
                     
-                    # Get all budgets
+                    # Get monthly data
+                    monthly_income = monthly_status.get("monthly_income", 0)
+                    monthly_expenses = monthly_status.get("monthly_expenses", 0)
+                    remaining_this_month = monthly_status.get("remaining_this_month", 0)
+                    projected_patrimony = monthly_status.get("projected_patrimony", current_patrimony)
+                    
+                    # Get all budgets with details
                     budget_categories = ["fixed_survival", "debt_offensive", "kepler_growth", "networking_life", "stupid_expenses"]
-                    budgets_info = []
+                    category_names = {
+                        "fixed_survival": "Gastos Fijos/Sobrevivencia",
+                        "debt_offensive": "Pagos Extra Deuda",
+                        "kepler_growth": "Inversión Negocio",
+                        "networking_life": "Vida Social/Networking",
+                        "stupid_expenses": "Gastos Innecesarios"
+                    }
+                    
+                    budgets_detail = []
                     total_spent = 0
+                    total_limit = 0
                     for cat in budget_categories:
                         try:
                             budget = await get_budget_status(cat)
-                            budgets_info.append(f"  {cat}: ${budget.get('current_spent', 0):,.0f} / ${budget.get('monthly_limit', 0):,.0f} COP")
-                            total_spent += float(budget.get('current_spent', 0) or 0)
+                            spent = float(budget.get('current_spent', 0) or 0)
+                            limit = float(budget.get('monthly_limit', 0) or 0)
+                            remaining = budget.get('remaining', 0)
+                            percentage = (spent / limit * 100) if limit > 0 else 0
+                            total_spent += spent
+                            total_limit += limit
+                            budgets_detail.append({
+                                "name": category_names.get(cat, cat),
+                                "category": cat,
+                                "spent": spent,
+                                "limit": limit,
+                                "remaining": remaining,
+                                "percentage": percentage
+                            })
                         except:
                             pass
                     
-                    response_text = "📊 RESUMEN FINANCIERO:\n\n"
-                    response_text += "💳 DEUDAS:\n"
+                    # Get current date info
+                    today = datetime.now()
+                    day_of_month = today.day
+                    days_in_month = (datetime(today.year, today.month + 1, 1) - datetime(today.year, today.month, 1)).days if today.month < 12 else (datetime(today.year + 1, 1, 1) - datetime(today.year, today.month, 1)).days
+                    month_progress = (day_of_month / days_in_month) * 100
+                    
+                    # Build comprehensive report
+                    response_text = "📊 REPORTE FINANCIERO GENERAL\n"
+                    response_text += f"📅 Fecha: {today.strftime('%d/%m/%Y')} (Día {day_of_month} de {days_in_month} - {month_progress:.0f}% del mes)\n"
+                    response_text += "═" * 40 + "\n\n"
+                    
+                    # 1. PATRIMONIO
+                    response_text += "💰 PATRIMONIO\n"
+                    response_text += "─" * 40 + "\n"
+                    response_text += f"Patrimonio Inicial:  ${initial_patrimony:,.0f} COP\n"
+                    response_text += f"Patrimonio Actual:   ${current_patrimony:,.0f} COP\n"
+                    response_text += f"Crecimiento Total:   ${patrimony_growth:+,.0f} COP\n"
+                    if patrimony_growth != 0:
+                        growth_pct = (patrimony_growth / initial_patrimony * 100) if initial_patrimony > 0 else 0
+                        response_text += f"                     ({growth_pct:+.1f}% desde el inicio)\n"
+                    response_text += "\n"
+                    
+                    # 2. ESTE MES (DETALLADO)
+                    response_text += "📆 ESTE MES (Hasta hoy)\n"
+                    response_text += "─" * 40 + "\n"
+                    response_text += f"Ingresos del mes:    ${monthly_income:,.0f} COP\n"
+                    response_text += f"Gastos del mes:      ${monthly_expenses:,.0f} COP\n"
+                    response_text += f"Resta este mes:      ${remaining_this_month:+,.0f} COP\n"
+                    
+                    if monthly_income > 0:
+                        expense_ratio = (monthly_expenses / monthly_income * 100)
+                        response_text += f"Gasto/Ingreso:       {expense_ratio:.1f}%\n"
+                    
+                    if remaining_this_month > 0:
+                        response_text += f"Proyección fin mes:  ${projected_patrimony:,.0f} COP\n"
+                    else:
+                        response_text += f"⚠️  Gastaste más de lo que ingresaste\n"
+                    response_text += "\n"
+                    
+                    # 3. DEUDAS
+                    response_text += "💳 DEUDAS\n"
+                    response_text += "─" * 40 + "\n"
                     for debt in debts:
                         name = debt.get("name", "Unknown")
                         current = float(debt.get("current_balance", 0) or 0)
-                        response_text += f"  {name}: ${current:,.0f} COP\n"
-                    response_text += f"  Total: ${total_debt:,.0f} COP\n\n"
+                        initial = float(debt.get("initial_balance", 0) or 0)
+                        paid = initial - current
+                        paid_pct = (paid / initial * 100) if initial > 0 else 0
+                        response_text += f"{name}:\n"
+                        response_text += f"  Saldo inicial:    ${initial:,.0f} COP\n"
+                        response_text += f"  Saldo actual:     ${current:,.0f} COP\n"
+                        response_text += f"  Pagado:           ${paid:,.0f} COP ({paid_pct:.1f}%)\n"
+                        response_text += f"  Resta:            ${current:,.0f} COP\n"
+                    response_text += f"\nTotal Deudas:        ${total_debt:,.0f} COP\n"
+                    response_text += f"Total Pagado:        ${debt_paid:,.0f} COP\n"
+                    response_text += "\n"
                     
-                    response_text += "💰 PATRIMONIO:\n"
-                    response_text += f"  Acumulado: ${current_patrimony:,.0f} COP\n"
-                    response_text += f"  Este mes queda: ${monthly_status.get('remaining_this_month', 0):,.0f} COP\n\n"
+                    # 4. PRESUPUESTOS DESGLOSADOS
+                    response_text += "📈 PRESUPUESTOS MENSUALES\n"
+                    response_text += "─" * 40 + "\n"
+                    for budget in budgets_detail:
+                        spent = budget["spent"]
+                        limit = budget["limit"]
+                        remaining = budget["remaining"]
+                        pct = budget["percentage"]
+                        
+                        # Barra visual simple
+                        bar_length = 20
+                        filled = int((pct / 100) * bar_length) if limit > 0 else 0
+                        bar = "█" * filled + "░" * (bar_length - filled)
+                        
+                        response_text += f"\n{budget['name']}:\n"
+                        response_text += f"  [{bar}] {pct:.0f}%\n"
+                        response_text += f"  Gastado:   ${spent:,.0f} / ${limit:,.0f} COP\n"
+                        response_text += f"  Restante:  ${remaining:+,.0f} COP\n"
                     
-                    response_text += "📈 PRESUPUESTOS:\n"
-                    response_text += "\n".join(budgets_info)
-                    response_text += f"\n  Total gastado: ${total_spent:,.0f} COP"
+                    response_text += f"\nTOTAL PRESUPUESTOS:\n"
+                    response_text += f"  Límite total:  ${total_limit:,.0f} COP\n"
+                    response_text += f"  Gastado total: ${total_spent:,.0f} COP\n"
+                    response_text += f"  Restante:      ${total_limit - total_spent:+,.0f} COP\n"
+                    response_text += "\n"
+                    
+                    # 5. ANÁLISIS Y NET WORTH
+                    net_worth = current_patrimony - total_debt
+                    response_text += "📊 ANÁLISIS GENERAL\n"
+                    response_text += "─" * 40 + "\n"
+                    response_text += f"Net Worth:          ${net_worth:+,.0f} COP\n"
+                    response_text += f"(Patrimonio - Deudas)\n"
+                    
+                    if net_worth < 0:
+                        response_text += f"\n⚠️  Tienes deuda neta: ${abs(net_worth):,.0f} COP\n"
+                    else:
+                        response_text += f"\n✅ Patrimonio positivo\n"
+                    
+                    response_text += "\n" + "═" * 40
                     
                 except Exception as e:
                     logger.error(f"Error getting financial summary: {str(e)}")
@@ -422,6 +537,69 @@ async def webhook(request: Request):
                 except Exception as e:
                     logger.error(f"Error generating spending advice: {str(e)}")
                     response_text = f"Error analizando tu consulta: {str(e)}"
+            
+            elif action == "query_transaction":
+                # User wants to query past transactions
+                try:
+                    # Extract search parameters from description
+                    query_desc = description.lower() if description else ""
+                    
+                    # Try to extract category, type, and days from the query
+                    search_category = None
+                    search_type = None
+                    search_days = None
+                    search_desc = None
+                    
+                    # Check for time references
+                    if "hoy" in query_desc or "today" in query_desc:
+                        search_days = 1
+                    elif "semana" in query_desc or "week" in query_desc:
+                        search_days = 7
+                    elif "mes" in query_desc or "month" in query_desc:
+                        search_days = 30
+                    
+                    # Check for transaction type
+                    if "ingreso" in query_desc or "income" in query_desc or "gané" in query_desc:
+                        search_type = "income"
+                    elif "gasto" in query_desc or "expense" in query_desc or "gasté" in query_desc:
+                        search_type = "expense"
+                    
+                    # Check for category keywords
+                    category_keywords = {
+                        "fixed_survival": ["survival", "fijo", "arriendo", "servicio", "servicios"],
+                        "debt_offensive": ["deuda", "debt", "lumni", "icetex"],
+                        "kepler_growth": ["kepler", "negocio", "curso", "aws", "api"],
+                        "networking_life": ["networking", "social", "amigo", "novia"],
+                        "stupid_expenses": ["stupid", "tonto", "lujo"]
+                    }
+                    
+                    for cat, keywords in category_keywords.items():
+                        if any(kw in query_desc for kw in keywords):
+                            search_category = cat
+                            break
+                    
+                    # Use description as search term if no specific filters
+                    if not search_category and not search_type and description:
+                        search_desc = description
+                    
+                    # Get transactions
+                    transactions = await get_transactions(
+                        description=search_desc,
+                        category=search_category,
+                        transaction_type=search_type,
+                        limit=50,
+                        days=search_days
+                    )
+                    
+                    # Generate response
+                    response_text = generate_transaction_query_response(
+                        user_query=user_text,
+                        transactions=transactions,
+                        conversation_history=conversation_history
+                    )
+                except Exception as e:
+                    logger.error(f"Error querying transactions: {str(e)}")
+                    response_text = f"Error consultando transacciones: {str(e)}"
             
             else:
                 response_text = "Acción no reconocida. Por favor, intenta de nuevo."

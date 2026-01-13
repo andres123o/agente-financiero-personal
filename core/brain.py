@@ -114,12 +114,14 @@ ACCIONES VÁLIDAS:
 - "financial_summary": Resumen total.
 - "close_month": Cierre de mes.
 - "consult_spending": Pregunta "¿Debería comprar X?" (Evaluación financiera).
+- "query_transaction": Pregunta sobre transacciones pasadas (ej: "¿Cuánto gasté en X?", "¿Cuándo gasté Y?", "¿Qué gastos hice esta semana?").
 
 REGLAS DE CLASIFICACIÓN:
 1. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
 2. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
 3. Ante duda entre networking y stupid -> stupid_expenses.
 4. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
+5. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
 
 Responde SOLO JSON:
 {
@@ -239,6 +241,77 @@ REGLA DE ORO: Sé un COACH FINANCIERO realista que ayuda a construir riqueza sin
         return response.choices[0].message.content.strip()
     except Exception:
         return "Transacción registrada."
+
+def generate_transaction_query_response(user_query: str, transactions: list, conversation_history: Optional[list] = None) -> str:
+    """
+    Genera respuesta del CFO cuando el usuario consulta sobre transacciones pasadas.
+    """
+    system_prompt = """Eres "Kepler CFO", el asistente financiero personal de un joven de 25 años que trabaja en una startup, le gusta la ciencia y el deporte, juega fútbol 1 vez por semana, tiene novia, está empezando a ganar bien y quiere emprender para generar más dinero.
+
+TU CONTEXTO DEL USUARIO:
+- 25 años, trabaja en startup
+- Intereses: ciencia, deporte (juega fútbol semanal)
+- Tiene novia (vida social activa)
+- Quiere emprender y generar más dinero
+- Está construyendo su futuro financiero
+
+TU FILOSOFÍA:
+- Sé REALISTA y CONVERSACIONAL: Responde preguntas sobre transacciones de forma clara y útil
+- Usa el historial conversacional para contextualizar
+- Presenta la información de forma organizada pero natural
+- Si no hay transacciones que coincidan, explica claramente
+- Analiza patrones si es relevante ("Veo que gastaste X en esto varias veces")
+
+TONO: Natural, conversacional, útil. Como un asistente financiero que entiende el contexto."""
+    
+    # Formatear transacciones para el prompt
+    if not transactions:
+        transactions_text = "No se encontraron transacciones que coincidan con la búsqueda."
+    else:
+        transactions_text = f"Transacciones encontradas ({len(transactions)}):\n"
+        for t in transactions[:20]:  # Limitar a 20 para no sobrecargar
+            amount = float(t.get("amount", 0) or 0)
+            cat = t.get("category", "N/A")
+            desc = t.get("description", "Sin descripción")
+            trans_type = t.get("type", "expense")
+            created_at = t.get("created_at", "")
+            date_str = created_at.split("T")[0] if created_at else "Fecha desconocida"
+            transactions_text += f"- ${amount:,.0f} COP ({trans_type}) - {cat} - {desc} - {date_str}\n"
+        if len(transactions) > 20:
+            transactions_text += f"\n... y {len(transactions) - 20} transacciones más"
+    
+    user_prompt = f"Consulta del usuario: {user_query}\n\n{transactions_text}"
+    
+    try:
+        client = get_openai_client()
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Agregar historial conversacional si existe
+        if conversation_history:
+            for msg in conversation_history:
+                msg_role = msg.get('role', 'user')
+                msg_content = msg.get('message', '')
+                if msg_role in ['user', 'assistant'] and msg_content:
+                    messages.append({"role": msg_role, "content": msg_content})
+        
+        # Agregar el mensaje actual
+        messages.append({"role": "user", "content": user_prompt})
+        
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=400,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        if transactions:
+            # Fallback: mostrar transacciones de forma simple
+            summary = f"Encontré {len(transactions)} transacciones:\n"
+            total = sum(float(t.get("amount", 0) or 0) for t in transactions)
+            summary += f"Total: ${total:,.0f} COP"
+            return summary
+        return "No se encontraron transacciones que coincidan con tu búsqueda."
 
 def generate_spending_advice(user_query: str, amount: float, financial_state: Dict[str, Any], conversation_history: Optional[list] = None) -> str:
     """

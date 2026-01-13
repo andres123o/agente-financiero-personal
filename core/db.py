@@ -83,6 +83,66 @@ async def insert_transaction(amount: float, category: str, description: str, tra
         raise Exception(f"Error inserting transaction: {str(e)}")
 
 
+async def get_transactions(
+    description: Optional[str] = None,
+    category: Optional[str] = None,
+    transaction_type: Optional[str] = None,
+    limit: int = 50,
+    days: Optional[int] = None
+) -> list[Dict[str, Any]]:
+    """
+    Get transactions from the database with optional filters.
+    
+    Args:
+        description: Filter by description (partial match, case insensitive)
+        category: Filter by category
+        transaction_type: Filter by type ('expense' or 'income')
+        limit: Maximum number of transactions to return (default: 50)
+        days: Filter by last N days (optional)
+        
+    Returns:
+        List of transaction dictionaries
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/transactions"
+        params = {
+            "order": "created_at.desc",
+            "limit": str(limit)
+        }
+        
+        # Add filters
+        if category:
+            params["category"] = f"eq.{category}"
+        if transaction_type:
+            params["type"] = f"eq.{transaction_type}"
+        if days:
+            date_filter = (datetime.now() - timedelta(days=days)).isoformat() + "Z"
+            params["created_at"] = f"gte.{date_filter}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            transactions = result if isinstance(result, list) else []
+            
+            # Filter by description if provided (Supabase text search is limited, so we filter in Python)
+            if description:
+                desc_lower = description.lower()
+                transactions = [
+                    t for t in transactions 
+                    if t.get("description") and desc_lower in t.get("description", "").lower()
+                ]
+            
+            return transactions
+    except Exception as e:
+        logger.error(f"Error getting transactions: {str(e)}")
+        return []
+
+
 async def get_budget(category: str) -> Optional[Dict[str, Any]]:
     """
     Get budget information for a specific category.
