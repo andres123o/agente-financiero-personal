@@ -625,3 +625,165 @@ async def get_conversation_history(chat_id: int, limit: int = 8) -> list[Dict[st
         logger.error(f"Error getting conversation history: {str(e)}")
         return []
 
+
+# ============================================
+# THOUGHTS & REMINDERS FUNCTIONS
+# ============================================
+
+async def save_thought_reminder(
+    chat_id: int,
+    content: str,
+    thought_type: str = "thought",
+    reminder_date: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Save a thought, reminder, idea or note.
+    
+    Args:
+        chat_id: Telegram chat ID
+        content: Content of the thought/reminder/idea
+        thought_type: Type - 'thought', 'reminder', 'idea', or 'note' (default: 'thought')
+        reminder_date: Optional specific date for reminders (format: 'YYYY-MM-DD')
+        
+    Returns:
+        Dict with saved thought data
+    """
+    try:
+        # Validate type
+        valid_types = ["thought", "reminder", "idea", "note"]
+        if thought_type not in valid_types:
+            thought_type = "thought"
+        
+        data = {
+            "chat_id": chat_id,
+            "content": content,
+            "type": thought_type,
+            "reminder_date": reminder_date
+        }
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/thoughts_reminders"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            return result[0] if isinstance(result, list) and result else result
+    except Exception as e:
+        raise Exception(f"Error saving thought/reminder: {str(e)}")
+
+
+async def get_thoughts_reminders(
+    chat_id: int,
+    date: Optional[str] = None,
+    thought_type: Optional[str] = None,
+    limit: int = 50
+) -> list[Dict[str, Any]]:
+    """
+    Get thoughts, reminders, ideas or notes.
+    
+    Args:
+        chat_id: Telegram chat ID
+        date: Optional date filter ('today', 'yesterday', or 'YYYY-MM-DD')
+        thought_type: Optional type filter ('thought', 'reminder', 'idea', 'note')
+        limit: Maximum number of results (default: 50)
+        
+    Returns:
+        List of thoughts/reminders dictionaries
+    """
+    try:
+        from datetime import datetime, timedelta
+        
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/thoughts_reminders"
+        params = {
+            "chat_id": f"eq.{chat_id}",
+            "order": "created_at.desc",
+            "limit": str(limit)
+        }
+        
+        # Handle type filter
+        if thought_type:
+            valid_types = ["thought", "reminder", "idea", "note"]
+            if thought_type in valid_types:
+                params["type"] = f"eq.{thought_type}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            result_list = result if isinstance(result, list) else []
+            
+            # Handle date filter manually (more flexible)
+            if date:
+                if date.lower() == "today":
+                    today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+                elif date.lower() == "yesterday":
+                    yesterday = datetime.now() - timedelta(days=1)
+                    today_start = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+                    today_end = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999)
+                else:
+                    # Assume format YYYY-MM-DD
+                    try:
+                        target_date = datetime.strptime(date, "%Y-%m-%d")
+                        today_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                        today_end = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    except:
+                        return result_list
+                
+                date_filter = today_start.date().isoformat()
+                filtered = []
+                
+                for item in result_list:
+                    created_str = item.get("created_at", "")
+                    reminder_str = item.get("reminder_date", "")
+                    
+                    # Check if reminder_date matches
+                    if reminder_str and str(reminder_str) == date_filter:
+                        filtered.append(item)
+                        continue
+                    
+                    # Check if created_at matches the day
+                    if created_str:
+                        try:
+                            created_dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+                            created_dt_naive = created_dt.replace(tzinfo=None)
+                            if today_start <= created_dt_naive <= today_end:
+                                filtered.append(item)
+                        except:
+                            pass
+                
+                return filtered
+            
+            return result_list
+    except Exception as e:
+        logger.error(f"Error getting thoughts/reminders: {str(e)}")
+        return []
+
+
+async def update_thought_completed(thought_id: str, is_completed: bool = True) -> Dict[str, Any]:
+    """
+    Mark a reminder/thought as completed.
+    
+    Args:
+        thought_id: UUID of the thought/reminder
+        is_completed: True to mark as completed, False to unmark
+        
+    Returns:
+        Updated thought dictionary
+    """
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/thoughts_reminders"
+        params = {"id": f"eq.{thought_id}"}
+        data = {"is_completed": is_completed}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(url, params=params, json=data, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            return result[0] if isinstance(result, list) and result else result
+    except Exception as e:
+        raise Exception(f"Error updating thought completion status: {str(e)}")
+

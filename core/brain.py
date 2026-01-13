@@ -115,6 +115,8 @@ ACCIONES VÁLIDAS:
 - "close_month": Cierre de mes.
 - "consult_spending": Pregunta "¿Debería comprar X?" (Evaluación financiera).
 - "query_transaction": Pregunta sobre transacciones pasadas (ej: "¿Cuánto gasté en X?", "¿Cuándo gasté Y?", "¿Qué gastos hice esta semana?").
+- "save_thought": Guardar pensamiento, recordatorio, idea o nota (ej: "guarda este recordatorio", "guarda esta idea", "guarda este pensamiento").
+- "query_thoughts": Consultar pensamientos/recordatorios (ej: "muéstrame mis recordatorios de hoy", "¿qué pensamientos guardé ayer?").
 
 REGLAS DE CLASIFICACIÓN:
 1. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
@@ -122,6 +124,8 @@ REGLAS DE CLASIFICACIÓN:
 3. Ante duda entre networking y stupid -> stupid_expenses.
 4. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
 5. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
+6. Comandos para guardar ("guarda este recordatorio", "guarda esta idea", "guarda este pensamiento", "guarda esta nota") -> action: "save_thought". Detecta el tipo desde las palabras clave.
+7. Consultas sobre pensamientos ("muéstrame mis recordatorios", "¿qué pensamientos guardé?", "recordatorios de hoy") -> action: "query_thoughts".
 
 Responde SOLO JSON:
 {

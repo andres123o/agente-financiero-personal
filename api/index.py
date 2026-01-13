@@ -30,7 +30,10 @@ from core.db import (
     get_complete_financial_state,
     save_conversation_message,
     get_conversation_history,
-    get_transactions
+    get_transactions,
+    save_thought_reminder,
+    get_thoughts_reminders,
+    update_thought_completed
 )
 from core.telegram import send_message
 
@@ -600,6 +603,141 @@ async def webhook(request: Request):
                 except Exception as e:
                     logger.error(f"Error querying transactions: {str(e)}")
                     response_text = f"Error consultando transacciones: {str(e)}"
+            
+            elif action == "save_thought":
+                # User wants to save a thought, reminder, idea or note
+                try:
+                    # Extract type from description
+                    desc_lower = description.lower() if description else user_text.lower()
+                    thought_type = "thought"  # default
+                    
+                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                        thought_type = "reminder"
+                    elif "idea" in desc_lower:
+                        thought_type = "idea"
+                    elif "nota" in desc_lower or "note" in desc_lower:
+                        thought_type = "note"
+                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                        thought_type = "thought"
+                    
+                    # Extract date if mentioned (for reminders)
+                    reminder_date = None
+                    from datetime import datetime, timedelta
+                    if "mañana" in desc_lower or "tomorrow" in desc_lower:
+                        reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
+                    elif "hoy" in desc_lower or "today" in desc_lower:
+                        reminder_date = datetime.now().date().isoformat()
+                    
+                    # Extract content (remove command words)
+                    content = user_text
+                    command_words = ["guarda", "save", "recordatorio", "reminder", "idea", "pensamiento", "thought", "nota", "note", "este", "esta"]
+                    words = content.split()
+                    content_words = [w for w in words if w.lower() not in command_words]
+                    content = " ".join(content_words).strip()
+                    
+                    if not content:
+                        content = description if description else user_text
+                    
+                    # Save thought/reminder
+                    saved = await save_thought_reminder(
+                        chat_id=chat_id,
+                        content=content,
+                        thought_type=thought_type,
+                        reminder_date=reminder_date
+                    )
+                    
+                    type_names = {
+                        "reminder": "recordatorio",
+                        "idea": "idea",
+                        "note": "nota",
+                        "thought": "pensamiento"
+                    }
+                    type_name = type_names.get(thought_type, "pensamiento")
+                    
+                    response_text = f"✅ {type_name.capitalize()} guardado:\n\n{content}"
+                    if reminder_date:
+                        response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
+                    
+                except Exception as e:
+                    logger.error(f"Error saving thought: {str(e)}")
+                    response_text = f"Error guardando el pensamiento: {str(e)}"
+            
+            elif action == "query_thoughts":
+                # User wants to query thoughts/reminders
+                try:
+                    # Extract filters from description
+                    desc_lower = description.lower() if description else user_text.lower()
+                    
+                    # Detect date filter
+                    date_filter = None
+                    if "hoy" in desc_lower or "today" in desc_lower:
+                        date_filter = "today"
+                    elif "ayer" in desc_lower or "yesterday" in desc_lower:
+                        date_filter = "yesterday"
+                    
+                    # Detect type filter
+                    thought_type = None
+                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                        thought_type = "reminder"
+                    elif "idea" in desc_lower:
+                        thought_type = "idea"
+                    elif "nota" in desc_lower or "note" in desc_lower:
+                        thought_type = "note"
+                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                        thought_type = "thought"
+                    
+                    # Get thoughts/reminders
+                    thoughts = await get_thoughts_reminders(
+                        chat_id=chat_id,
+                        date=date_filter,
+                        thought_type=thought_type,
+                        limit=30
+                    )
+                    
+                    if not thoughts:
+                        response_text = "No encontré pensamientos/recordatorios que coincidan con tu búsqueda."
+                    else:
+                        type_names = {
+                            "reminder": "Recordatorio",
+                            "idea": "Idea",
+                            "note": "Nota",
+                            "thought": "Pensamiento"
+                        }
+                        
+                        response_text = f"📝 {len(thoughts)} {'pensamientos' if thought_type is None else type_names.get(thought_type, 'items')} encontrados:\n\n"
+                        
+                        for i, thought in enumerate(thoughts[:20], 1):  # Limit to 20
+                            content = thought.get("content", "")
+                            t_type = thought.get("type", "thought")
+                            created_at = thought.get("created_at", "")
+                            reminder_date = thought.get("reminder_date")
+                            is_completed = thought.get("is_completed", False)
+                            
+                            # Format date
+                            date_str = ""
+                            if created_at:
+                                try:
+                                    from datetime import datetime
+                                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                                    date_str = dt.strftime("%d/%m/%Y %H:%M")
+                                except:
+                                    date_str = created_at.split("T")[0] if "T" in created_at else created_at
+                            
+                            status = "✅" if is_completed else ""
+                            type_emoji = {"reminder": "🔔", "idea": "💡", "note": "📄", "thought": "💭"}.get(t_type, "📝")
+                            
+                            response_text += f"{i}. {type_emoji} {type_names.get(t_type, t_type)} {status}\n"
+                            response_text += f"   {content}\n"
+                            if reminder_date:
+                                response_text += f"   📅 {reminder_date}\n"
+                            response_text += f"   📆 {date_str}\n\n"
+                        
+                        if len(thoughts) > 20:
+                            response_text += f"... y {len(thoughts) - 20} más"
+                    
+                except Exception as e:
+                    logger.error(f"Error querying thoughts: {str(e)}")
+                    response_text = f"Error consultando pensamientos: {str(e)}"
             
             else:
                 response_text = "Acción no reconocida. Por favor, intenta de nuevo."
