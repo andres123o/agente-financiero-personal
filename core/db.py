@@ -664,12 +664,34 @@ async def save_thought_reminder(
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/thoughts_reminders"
         
+        logger.info(f"Saving to Supabase - URL: {url}, Data: {data}")
+        
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=data, headers=headers)
+            
+            # Log response for debugging
+            logger.info(f"Supabase response status: {response.status_code}")
+            
+            if response.status_code != 201:
+                error_detail = response.text
+                try:
+                    error_json = response.json()
+                    error_detail = str(error_json)
+                except:
+                    pass
+                logger.error(f"Supabase error {response.status_code}: {error_detail}")
+                raise Exception(f"Supabase error {response.status_code}: {error_detail}. Request data: {data}")
+            
             response.raise_for_status()
             result = response.json()
+            logger.info(f"Successfully saved to Supabase: {result}")
             return result[0] if isinstance(result, list) and result else result
+    except httpx.HTTPStatusError as e:
+        error_detail = e.response.text if e.response else str(e)
+        logger.error(f"HTTP error saving thought: {error_detail}")
+        raise Exception(f"Error saving thought/reminder (HTTP {e.response.status_code if e.response else 'unknown'}): {error_detail}")
     except Exception as e:
+        logger.error(f"Error saving thought/reminder: {str(e)}", exc_info=True)
         raise Exception(f"Error saving thought/reminder: {str(e)}")
 
 

@@ -178,16 +178,17 @@ async def webhook(request: Request):
                     "category": None,
                     "description": user_text
                 }
-                logger.info("Detected 'guarda' command directly, forcing save_thought action")
+                logger.info(f"Detected 'guarda' command directly - user_text: {user_text}, forcing save_thought action")
             else:
                 classification = classify_financial_action(user_text)
+                logger.info(f"Classification from LLM: {classification}")
             
             action = classification.get("action", "unknown")
             amount = float(classification.get("amount", 0))
             category = classification.get("category")
             description = classification.get("description", "")
             
-            logger.info(f"Classification result: {classification}")
+            logger.info(f"Action detected: {action}, description: {description}, chat_id: {chat_id}, user_text: {user_text}")
             
             # Step 3: Handle different financial actions
             budget_status = None
@@ -620,6 +621,8 @@ async def webhook(request: Request):
             elif action == "save_thought":
                 # User wants to save a thought, reminder, idea or note
                 try:
+                    logger.info(f"Saving thought - user_text: {user_text}, description: {description}")
+                    
                     # Extract type from description
                     desc_lower = description.lower() if description else user_text.lower()
                     thought_type = "thought"  # default
@@ -648,8 +651,29 @@ async def webhook(request: Request):
                     content_words = [w for w in words if w.lower() not in command_words]
                     content = " ".join(content_words).strip()
                     
-                    if not content:
-                        content = description if description else user_text
+                    # Si después de remover palabras no queda nada, usar description o el texto completo sin "guarda"
+                    if not content or content == "":
+                        if description and description != user_text:
+                            content = description
+                        else:
+                            # Remover solo "guarda esta" o "guarda este" del inicio
+                            content = user_text
+                            if content.lower().startswith("guarda esta "):
+                                content = content[12:].strip()
+                            elif content.lower().startswith("guarda este "):
+                                content = content[12:].strip()
+                            elif content.lower().startswith("guarda "):
+                                content = content[7:].strip()
+                            else:
+                                content = user_text
+                    
+                    # Validar que content no esté vacío
+                    if not content or len(content.strip()) == 0:
+                        content = "Sin contenido"  # Fallback mínimo
+                    
+                    logger.info(f"Final content to save: '{content}' (length: {len(content)})")
+                    
+                    logger.info(f"Attempting to save - chat_id: {chat_id}, content: {content}, type: {thought_type}")
                     
                     # Save thought/reminder
                     saved = await save_thought_reminder(
@@ -658,6 +682,8 @@ async def webhook(request: Request):
                         thought_type=thought_type,
                         reminder_date=reminder_date
                     )
+                    
+                    logger.info(f"Successfully saved thought: {saved}")
                     
                     type_names = {
                         "reminder": "recordatorio",
@@ -672,7 +698,7 @@ async def webhook(request: Request):
                         response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
                     
                 except Exception as e:
-                    logger.error(f"Error saving thought: {str(e)}")
+                    logger.error(f"Error saving thought: {str(e)}", exc_info=True)
                     response_text = f"Error guardando el pensamiento: {str(e)}"
             
             elif action == "query_thoughts":
