@@ -167,7 +167,20 @@ async def webhook(request: Request):
         else:
             # Route to Finance Layer (CFO)
             logger.info(f"Routing to Finance Layer")
-            classification = classify_financial_action(user_text)
+            
+            # Detección directa de comandos "guarda" antes del LLM
+            user_lower = user_text.lower().strip()
+            if user_lower.startswith("guarda") or "guarda esta" in user_lower or "guarda este" in user_lower:
+                # Forzar acción save_thought directamente
+                classification = {
+                    "action": "save_thought",
+                    "amount": 0,
+                    "category": None,
+                    "description": user_text
+                }
+                logger.info("Detected 'guarda' command directly, forcing save_thought action")
+            else:
+                classification = classify_financial_action(user_text)
             
             action = classification.get("action", "unknown")
             amount = float(classification.get("amount", 0))
@@ -654,7 +667,7 @@ async def webhook(request: Request):
                     }
                     type_name = type_names.get(thought_type, "pensamiento")
                     
-                    response_text = f"✅ {type_name.capitalize()} guardado:\n\n{content}"
+                    response_text = f"✅ Guardado exitosamente\n\n{type_name.capitalize()}: {content}"
                     if reminder_date:
                         response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
                     

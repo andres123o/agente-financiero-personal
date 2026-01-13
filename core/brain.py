@@ -118,14 +118,17 @@ ACCIONES VÁLIDAS:
 - "save_thought": Guardar pensamiento, recordatorio, idea o nota (ej: "guarda este recordatorio", "guarda esta idea", "guarda este pensamiento").
 - "query_thoughts": Consultar pensamientos/recordatorios (ej: "muéstrame mis recordatorios de hoy", "¿qué pensamientos guardé ayer?").
 
-REGLAS DE CLASIFICACIÓN:
-1. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
-2. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
-3. Ante duda entre networking y stupid -> stupid_expenses.
-4. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
-5. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
-6. Comandos para guardar ("guarda este recordatorio", "guarda esta idea", "guarda este pensamiento", "guarda esta nota") -> action: "save_thought". Detecta el tipo desde las palabras clave.
-7. Consultas sobre pensamientos ("muéstrame mis recordatorios", "¿qué pensamientos guardé?", "recordatorios de hoy") -> action: "query_thoughts".
+REGLAS DE CLASIFICACIÓN (EN ORDEN DE PRIORIDAD):
+1. PRIORIDAD ALTA: Si el mensaje comienza con "guarda" o contiene "guarda este" o "guarda esta" -> SIEMPRE action: "save_thought". No importa qué más diga.
+2. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
+3. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
+4. Ante duda entre networking y stupid -> stupid_expenses.
+5. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
+6. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
+7. Comandos para guardar pensamientos ("guarda este recordatorio", "guarda esta idea", "guarda este pensamiento", "guarda esta nota") -> action: "save_thought". Detecta el tipo desde las palabras clave.
+8. Consultas sobre pensamientos ("muéstrame mis recordatorios", "¿qué pensamientos guardé?", "recordatorios de hoy") -> action: "query_thoughts".
+
+IMPORTANTE: Si el usuario dice "guarda" o "guarda esta" o "guarda este", SIEMPRE debe ser "save_thought". El contenido después de "guarda" va en "description".
 
 Responde SOLO JSON:
 {
