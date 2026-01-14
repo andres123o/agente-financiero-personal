@@ -654,9 +654,18 @@ async def save_thought_reminder(
         if thought_type not in valid_types:
             thought_type = "thought"
         
+        # Validate inputs
+        if not chat_id:
+            raise ValueError("chat_id is required")
+        if not content or not content.strip():
+            raise ValueError("content cannot be empty")
+        
+        # Ensure chat_id is an integer (BIGINT in database)
+        chat_id = int(chat_id)
+        
         data = {
             "chat_id": chat_id,
-            "content": content,
+            "content": content.strip(),
             "type": thought_type,
             "reminder_date": reminder_date
         }
@@ -664,15 +673,18 @@ async def save_thought_reminder(
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/thoughts_reminders"
         
-        logger.info(f"Saving to Supabase - URL: {url}, Data: {data}")
+        logger.info(f"Saving to Supabase - URL: {url}")
+        logger.info(f"Request data: chat_id={data['chat_id']} (type: {type(data['chat_id'])}), content='{data['content'][:100]}...', type={data['type']}, reminder_date={data['reminder_date']}")
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(url, json=data, headers=headers)
             
             # Log response for debugging
             logger.info(f"Supabase response status: {response.status_code}")
+            logger.info(f"Supabase response text: {response.text[:500]}")  # Log first 500 chars
             
-            if response.status_code != 201:
+            # Accept both 200 and 201 as success codes (Supabase may return either)
+            if response.status_code not in [200, 201]:
                 error_detail = response.text
                 try:
                     error_json = response.json()
@@ -682,10 +694,19 @@ async def save_thought_reminder(
                 logger.error(f"Supabase error {response.status_code}: {error_detail}")
                 raise Exception(f"Supabase error {response.status_code}: {error_detail}. Request data: {data}")
             
-            response.raise_for_status()
-            result = response.json()
-            logger.info(f"Successfully saved to Supabase: {result}")
-            return result[0] if isinstance(result, list) and result else result
+            # Parse response
+            try:
+                result = response.json()
+                logger.info(f"Successfully saved to Supabase: {result}")
+                # Supabase returns array with Prefer: return=representation
+                return result[0] if isinstance(result, list) and result else result
+            except Exception as e:
+                logger.error(f"Error parsing Supabase response: {str(e)}, Response text: {response.text[:500]}")
+                # If response is empty or not JSON, still consider it success if status is 200/201
+                if response.status_code in [200, 201]:
+                    logger.warning("Supabase returned success but no JSON response, assuming save was successful")
+                    return {"id": "unknown", "chat_id": chat_id, "content": content, "type": thought_type}
+                raise
     except httpx.HTTPStatusError as e:
         error_detail = e.response.text if e.response else str(e)
         logger.error(f"HTTP error saving thought: {error_detail}")

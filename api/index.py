@@ -644,46 +644,73 @@ async def webhook(request: Request):
                     elif "hoy" in desc_lower or "today" in desc_lower:
                         reminder_date = datetime.now().date().isoformat()
                     
-                    # Extract content (remove command words)
-                    content = user_text
-                    command_words = ["guarda", "save", "recordatorio", "reminder", "idea", "pensamiento", "thought", "nota", "note", "este", "esta"]
-                    words = content.split()
-                    content_words = [w for w in words if w.lower() not in command_words]
-                    content = " ".join(content_words).strip()
+                    # Extract content - mejor lógica para preservar el contenido
+                    content = user_text.strip()
                     
-                    # Si después de remover palabras no queda nada, usar description o el texto completo sin "guarda"
-                    if not content or content == "":
-                        if description and description != user_text:
-                            content = description
+                    # Remover comandos del inicio de manera más inteligente
+                    content_lower = content.lower()
+                    
+                    # Patrones comunes al inicio
+                    if content_lower.startswith("guarda esta idea "):
+                        content = content[17:].strip()
+                    elif content_lower.startswith("guarda este idea "):
+                        content = content[17:].strip()
+                    elif content_lower.startswith("guarda esta "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda este "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda idea "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda recordatorio "):
+                        content = content[20:].strip()
+                    elif content_lower.startswith("guarda pensamiento "):
+                        content = content[19:].strip()
+                    elif content_lower.startswith("guarda nota "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda "):
+                        content = content[7:].strip()
+                    
+                    # Si después de remover el comando no queda nada, usar el texto original
+                    if not content or len(content.strip()) == 0:
+                        # Si description es diferente y tiene contenido, usarlo
+                        if description and description.strip() and description != user_text:
+                            content = description.strip()
                         else:
-                            # Remover solo "guarda esta" o "guarda este" del inicio
-                            content = user_text
-                            if content.lower().startswith("guarda esta "):
-                                content = content[12:].strip()
-                            elif content.lower().startswith("guarda este "):
-                                content = content[12:].strip()
-                            elif content.lower().startswith("guarda "):
+                            # Usar el texto original sin el comando inicial
+                            content = user_text.strip()
+                            # Remover solo "guarda" del inicio si está
+                            if content_lower.startswith("guarda "):
                                 content = content[7:].strip()
-                            else:
-                                content = user_text
+                            # Si aún está vacío, usar el texto completo
+                            if not content:
+                                content = user_text.strip()
                     
                     # Validar que content no esté vacío
                     if not content or len(content.strip()) == 0:
-                        content = "Sin contenido"  # Fallback mínimo
+                        content = user_text.strip()  # Usar el texto original como último recurso
+                        if not content:
+                            content = "Sin contenido"  # Fallback mínimo
                     
                     logger.info(f"Final content to save: '{content}' (length: {len(content)})")
                     
-                    logger.info(f"Attempting to save - chat_id: {chat_id}, content: {content}, type: {thought_type}")
+                    # Ensure chat_id is an integer
+                    chat_id_int = int(chat_id) if chat_id else None
+                    if not chat_id_int:
+                        raise ValueError(f"Invalid chat_id: {chat_id}")
+                    
+                    logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
                     
                     # Save thought/reminder
                     saved = await save_thought_reminder(
-                        chat_id=chat_id,
+                        chat_id=chat_id_int,
                         content=content,
                         thought_type=thought_type,
                         reminder_date=reminder_date
                     )
                     
-                    logger.info(f"Successfully saved thought: {saved}")
+                    logger.info(f"Successfully saved thought - Response from DB: {saved}")
+                    if not saved or (isinstance(saved, dict) and not saved.get('id')):
+                        logger.warning(f"Save operation may have failed - no ID returned: {saved}")
                     
                     type_names = {
                         "reminder": "recordatorio",
