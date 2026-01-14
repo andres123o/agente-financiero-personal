@@ -288,20 +288,25 @@ async def webhook(request: Request):
             
             desc_lower = user_text.lower()
             
-            # Detect if it's a query (muéstrame, quiero ver, etc.) or save command
-            is_query = any(keyword in desc_lower for keyword in [
-                "muéstrame", "muestrame", "muestra", "quiero ver", "quiero que me muestres",
-                "dame", "dame los", "dame las", "ver", "mostrar", "listar", "listar los",
-                "qué", "cuales", "cuáles", "tengo", "tienes"
-            ])
+            # Check if it starts with "reminder:" or "recordatorio:" prefix
+            query_text = user_text
+            if desc_lower.startswith("reminder:"):
+                query_text = user_text[9:].strip()  # Remove "reminder:"
+                desc_lower = query_text.lower()
+            elif desc_lower.startswith("recordatorio:"):
+                query_text = user_text[13:].strip()  # Remove "recordatorio:"
+                desc_lower = query_text.lower()
+            
+            # Detect if it's a query (starts with prefix) or save command
+            is_query = user_text.lower().startswith("reminder:") or user_text.lower().startswith("recordatorio:")
             
             if is_query:
                 # QUERY MODE: User wants to see reminders/thoughts
-                logger.info(f"Detected query request in REMINDER layer")
+                logger.info(f"Detected query request in REMINDER layer - query_text: '{query_text}'")
                 
                 try:
-                    # Parse date from query
-                    date_filter = parse_date_query(user_text)
+                    # Parse date from query (use query_text which has the prefix removed)
+                    date_filter = parse_date_query(query_text)
                     logger.info(f"Parsed date filter: {date_filter}")
                     
                     # Extract type filter if mentioned

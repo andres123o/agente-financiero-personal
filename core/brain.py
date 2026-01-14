@@ -46,17 +46,19 @@ def analyze_intent(user_message: str) -> str:
     LAYER 1: The Gatekeeper.
     Decides if the user needs the CFO (Finance), the Mentor (Psychology/Strategy), or Reminder (Save thoughts/ideas).
     """
-    # PRIORIDAD 1: Detectar comandos "guarda" -> REMINDER
+    # PRIORIDAD 1: Detectar comandos relacionados con REMINDER
     user_lower = user_message.lower().strip()
-    if (
-        user_lower.startswith("guarda") or 
-        "guarda esta" in user_lower or 
-        "guarda este" in user_lower or
-        "guarda idea" in user_lower or
-        "guarda recordatorio" in user_lower or
-        "guarda pensamiento" in user_lower or
-        "guarda nota" in user_lower
-    ):
+    
+    # Detectar prefijo "reminder:" o "recordatorio:" para consultas
+    if user_lower.startswith("reminder:") or user_lower.startswith("recordatorio:"):
+        return "REMINDER"
+    
+    # Detectar comandos de guardado (guarda, guarda esta, guarda este, etc.)
+    save_keywords = [
+        "guarda", "guarda esta", "guarda este", "guarda idea", 
+        "guarda recordatorio", "guarda pensamiento", "guarda nota"
+    ]
+    if any(keyword in user_lower for keyword in save_keywords):
         return "REMINDER"
     
     # Si no es REMINDER, usar LLM para clasificar entre FINANCE y MENTORSHIP
