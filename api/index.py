@@ -46,6 +46,132 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Kepler CFO Telegram Bot")
 
 
+def parse_date_query(text: str) -> Optional[str]:
+    """
+    Parse Spanish date queries like "hoy", "ayer", "hace dos días", "viernes pasado", "hace dos meses"
+    Returns date string in format 'YYYY-MM-DD', 'today', 'yesterday', or None
+    """
+    from datetime import datetime, timedelta
+    import re
+    
+    text_lower = text.lower().strip()
+    now = datetime.now()
+    
+    # Días específicos
+    if "hoy" in text_lower or "today" in text_lower:
+        return "today"
+    elif "ayer" in text_lower or "yesterday" in text_lower:
+        return "yesterday"
+    elif "mañana" in text_lower or "tomorrow" in text_lower:
+        tomorrow = (now + timedelta(days=1)).date().isoformat()
+        return tomorrow
+    
+    # Números en palabras
+    number_words = {
+        'uno': 1, 'dos': 2, 'tres': 3, 'cuatro': 4, 'cinco': 5,
+        'seis': 6, 'siete': 7, 'ocho': 8, 'nueve': 9, 'diez': 10,
+        'once': 11, 'doce': 12, 'trece': 13, 'catorce': 14, 'quince': 15,
+        'veinte': 20, 'treinta': 30
+    }
+    
+    # "Hace X días" (números o palabras)
+    match = re.search(r'hace\s+(\d+)\s+d[ií]a[s]?', text_lower)
+    if match:
+        days_ago = int(match.group(1))
+        target_date = (now - timedelta(days=days_ago)).date().isoformat()
+        return target_date
+    
+    # "Hace dos días", "hace tres días", etc. (palabras)
+    for word, num in number_words.items():
+        if f'hace {word} día' in text_lower or f'hace {word} dias' in text_lower:
+            target_date = (now - timedelta(days=num)).date().isoformat()
+            return target_date
+    
+    # "Hace X semanas"
+    match = re.search(r'hace\s+(\d+)\s+semana[s]?', text_lower)
+    if match:
+        weeks_ago = int(match.group(1))
+        target_date = (now - timedelta(weeks=weeks_ago)).date().isoformat()
+        return target_date
+    
+    # "Hace dos semanas", etc. (palabras)
+    for word, num in number_words.items():
+        if f'hace {word} semana' in text_lower:
+            target_date = (now - timedelta(weeks=num)).date().isoformat()
+            return target_date
+    
+    # "Hace X meses"
+    match = re.search(r'hace\s+(\d+)\s+mes[es]?', text_lower)
+    if match:
+        months_ago = int(match.group(1))
+        # Aproximación: 30 días por mes
+        target_date = (now - timedelta(days=months_ago * 30)).date().isoformat()
+        return target_date
+    
+    # "Hace dos meses", etc. (palabras)
+    for word, num in number_words.items():
+        if f'hace {word} mes' in text_lower:
+            target_date = (now - timedelta(days=num * 30)).date().isoformat()
+            return target_date
+    
+    # Días de la semana pasados
+    days_of_week = {
+        'lunes': 0, 'martes': 1, 'miércoles': 2, 'miercoles': 2,
+        'jueves': 3, 'viernes': 4, 'sábado': 5, 'sabado': 5, 'domingo': 6
+    }
+    
+    for day_name, day_num in days_of_week.items():
+        if day_name in text_lower:
+            current_weekday = now.weekday()
+            if "pasado" in text_lower or "pasada" in text_lower:
+                # Día pasado: calcular cuántos días atrás está ese día
+                days_since = (current_weekday - day_num) % 7
+                if days_since == 0:
+                    days_since = 7  # Si es hoy, buscar el de la semana pasada
+                target_date = (now - timedelta(days=days_since)).date().isoformat()
+                return target_date
+            elif "próximo" in text_lower or "proximo" in text_lower or "siguiente" in text_lower:
+                # Día próximo: calcular cuántos días adelante está ese día
+                days_until = (day_num - current_weekday) % 7
+                if days_until == 0:
+                    days_until = 7  # Si es hoy, buscar el próximo
+                target_date = (now + timedelta(days=days_until)).date().isoformat()
+                return target_date
+    
+    # "La semana pasada" o "semana pasada"
+    if "semana pasada" in text_lower or "la semana pasada" in text_lower:
+        # Hace 7 días
+        target_date = (now - timedelta(days=7)).date().isoformat()
+        return target_date
+    
+    # "El mes pasado" o "mes pasado"
+    if "mes pasado" in text_lower or "el mes pasado" in text_lower:
+        # Aproximación: hace 30 días
+        target_date = (now - timedelta(days=30)).date().isoformat()
+        return target_date
+    
+    # Intentar parsear fecha en formato DD/MM/YYYY o DD-MM-YYYY
+    date_patterns = [
+        r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})',
+        r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})',
+    ]
+    
+    for pattern in date_patterns:
+        match = re.search(pattern, text_lower)
+        if match:
+            try:
+                if len(match.group(1)) == 4:  # YYYY-MM-DD
+                    year, month, day = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                else:  # DD-MM-YYYY
+                    day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+                target_date = datetime(year, month, day).date().isoformat()
+                return target_date
+            except:
+                pass
+    
+    return None
+
+
 def detect_debt_payment(description: str, category: str, amount: float) -> Optional[str]:
     """
     Detect if a payment is for Lumni or ICETEX debt.
@@ -157,112 +283,255 @@ async def webhook(request: Request):
         
         # Step 3: Route to appropriate layer
         if intent == "REMINDER":
-            # Route to Reminder Layer - handles saving thoughts/ideas/reminders/notes
+            # Route to Reminder Layer - handles saving and querying thoughts/ideas/reminders/notes
             logger.info(f"Routing to Reminder Layer")
             
-            # Extract type from description
             desc_lower = user_text.lower()
-            thought_type = "thought"  # default
             
-            if "recordatorio" in desc_lower or "reminder" in desc_lower:
-                thought_type = "reminder"
-            elif "idea" in desc_lower:
-                thought_type = "idea"
-            elif "nota" in desc_lower or "note" in desc_lower:
-                thought_type = "note"
-            elif "pensamiento" in desc_lower or "thought" in desc_lower:
-                thought_type = "thought"
+            # Detect if it's a query (muéstrame, quiero ver, etc.) or save command
+            is_query = any(keyword in desc_lower for keyword in [
+                "muéstrame", "muestrame", "muestra", "quiero ver", "quiero que me muestres",
+                "dame", "dame los", "dame las", "ver", "mostrar", "listar", "listar los",
+                "qué", "cuales", "cuáles", "tengo", "tienes"
+            ])
             
-            # Extract date if mentioned (for reminders)
-            reminder_date = None
-            from datetime import datetime, timedelta
-            if "mañana" in desc_lower or "tomorrow" in desc_lower:
-                reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
-            elif "hoy" in desc_lower or "today" in desc_lower:
-                reminder_date = datetime.now().date().isoformat()
-            
-            # Extract content - mejor lógica para preservar el contenido
-            content = user_text.strip()
-            
-            # Remover comandos del inicio de manera más inteligente
-            content_lower = content.lower()
-            
-            # Patrones comunes al inicio
-            if content_lower.startswith("guarda esta idea "):
-                content = content[17:].strip()
-            elif content_lower.startswith("guarda este idea "):
-                content = content[17:].strip()
-            elif content_lower.startswith("guarda esta "):
-                content = content[12:].strip()
-            elif content_lower.startswith("guarda este "):
-                content = content[12:].strip()
-            elif content_lower.startswith("guarda idea "):
-                content = content[12:].strip()
-            elif content_lower.startswith("guarda recordatorio "):
-                content = content[20:].strip()
-            elif content_lower.startswith("guarda pensamiento "):
-                content = content[19:].strip()
-            elif content_lower.startswith("guarda nota "):
-                content = content[12:].strip()
-            elif content_lower.startswith("guarda "):
-                content = content[7:].strip()
-            
-            # Remover "en la base de datos" si está presente
-            content = content.replace("en la base de datos", "").replace("en la bd", "").strip()
-            content = content.replace(":", "").strip()  # Remover dos puntos al final
-            
-            # Si después de remover el comando no queda nada, usar el texto original
-            if not content or len(content.strip()) == 0:
-                content = user_text.strip()
-                # Remover solo "guarda" del inicio si está
-                if content_lower.startswith("guarda "):
-                    content = content[7:].strip()
-                # Si aún está vacío, usar el texto completo
-                if not content:
-                    content = user_text.strip()
-            
-            # Validar que content no esté vacío
-            if not content or len(content.strip()) == 0:
-                content = user_text.strip()  # Usar el texto original como último recurso
-                if not content:
-                    content = "Sin contenido"  # Fallback mínimo
-            
-            logger.info(f"Final content to save: '{content}' (length: {len(content)})")
-            
-            # Ensure chat_id is an integer
-            chat_id_int = int(chat_id) if chat_id else None
-            if not chat_id_int:
-                response_text = f"Error: Invalid chat_id: {chat_id}"
-            else:
-                logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
+            if is_query:
+                # QUERY MODE: User wants to see reminders/thoughts
+                logger.info(f"Detected query request in REMINDER layer")
                 
                 try:
-                    # Save thought/reminder
-                    saved = await save_thought_reminder(
-                        chat_id=chat_id_int,
-                        content=content,
-                        thought_type=thought_type,
-                        reminder_date=reminder_date
-                    )
+                    # Parse date from query
+                    date_filter = parse_date_query(user_text)
+                    logger.info(f"Parsed date filter: {date_filter}")
                     
-                    logger.info(f"Successfully saved thought - Response from DB: {saved}")
-                    if not saved or (isinstance(saved, dict) and not saved.get('id')):
-                        logger.warning(f"Save operation may have failed - no ID returned: {saved}")
+                    # Extract type filter if mentioned
+                    query_thought_type = None
+                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                        query_thought_type = "reminder"
+                    elif "idea" in desc_lower:
+                        query_thought_type = "idea"
+                    elif "nota" in desc_lower or "note" in desc_lower:
+                        query_thought_type = "note"
+                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                        query_thought_type = "thought"
                     
-                    type_names = {
-                        "reminder": "recordatorio",
-                        "idea": "idea",
-                        "note": "nota",
-                        "thought": "pensamiento"
-                    }
-                    type_name = type_names.get(thought_type, "pensamiento")
-                    
-                    response_text = f"✅ Guardado exitosamente\n\n{type_name.capitalize()}: {content}"
-                    if reminder_date:
-                        response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
+                    # Get thoughts/reminders
+                    chat_id_int = int(chat_id) if chat_id else None
+                    if not chat_id_int:
+                        response_text = f"Error: Invalid chat_id: {chat_id}"
+                    else:
+                        thoughts = await get_thoughts_reminders(
+                            chat_id=chat_id_int,
+                            date=date_filter,
+                            thought_type=query_thought_type,
+                            limit=50
+                        )
+                        
+                        logger.info(f"Found {len(thoughts)} thoughts/reminders")
+                        
+                        if not thoughts:
+                            # Formatear mensaje según el filtro
+                            date_msg = ""
+                            if date_filter:
+                                if date_filter == "today":
+                                    date_msg = " de hoy"
+                                elif date_filter == "yesterday":
+                                    date_msg = " de ayer"
+                                else:
+                                    date_msg = f" del {date_filter}"
+                            
+                            type_msg = ""
+                            if query_thought_type:
+                                type_names = {
+                                    "reminder": "recordatorios",
+                                    "idea": "ideas",
+                                    "note": "notas",
+                                    "thought": "pensamientos"
+                                }
+                                type_msg = f" {type_names.get(query_thought_type, 'elementos')}"
+                            
+                            response_text = f"📭 No encontré{type_msg}{date_msg}."
+                        else:
+                            # Format response
+                            type_names = {
+                                "reminder": "📅 Recordatorio",
+                                "idea": "💡 Idea",
+                                "note": "📝 Nota",
+                                "thought": "💭 Pensamiento"
+                            }
+                            
+                            # Group by type if no specific type filter
+                            if not query_thought_type:
+                                grouped = {}
+                                for thought in thoughts:
+                                    t_type = thought.get("type", "thought")
+                                    if t_type not in grouped:
+                                        grouped[t_type] = []
+                                    grouped[t_type].append(thought)
+                                
+                                response_parts = []
+                                for t_type, items in grouped.items():
+                                    type_name = type_names.get(t_type, "📌 Elemento")
+                                    response_parts.append(f"\n{type_name} ({len(items)}):")
+                                    for item in items[:10]:  # Max 10 per type
+                                        content = item.get("content", "Sin contenido")
+                                        created = item.get("created_at", "")
+                                        reminder_date_str = item.get("reminder_date", "")
+                                        
+                                        # Format date
+                                        date_str = ""
+                                        if reminder_date_str:
+                                            date_str = f" [📅 {reminder_date_str}]"
+                                        elif created:
+                                            try:
+                                                from datetime import datetime
+                                                created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                                                date_str = f" [{created_dt.strftime('%d/%m/%Y')}]"
+                                            except:
+                                                pass
+                                        
+                                        response_parts.append(f"  • {content}{date_str}")
+                                
+                                response_text = "📋 Tus recordatorios/pensamientos:\n" + "\n".join(response_parts)
+                            else:
+                                # Single type, show all
+                                type_name = type_names.get(query_thought_type, "📌 Elemento")
+                                response_parts = [f"\n{type_name} ({len(thoughts)}):"]
+                                
+                                for item in thoughts[:20]:  # Max 20 items
+                                    content = item.get("content", "Sin contenido")
+                                    created = item.get("created_at", "")
+                                    reminder_date_str = item.get("reminder_date", "")
+                                    
+                                    # Format date
+                                    date_str = ""
+                                    if reminder_date_str:
+                                        date_str = f" [📅 {reminder_date_str}]"
+                                    elif created:
+                                        try:
+                                            from datetime import datetime
+                                            created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                                            date_str = f" [{created_dt.strftime('%d/%m/%Y')}]"
+                                        except:
+                                            pass
+                                    
+                                    response_parts.append(f"  • {content}{date_str}")
+                                
+                                response_text = f"📋 {type_name}s encontrados:\n" + "\n".join(response_parts)
+                            
+                            if len(thoughts) > 20:
+                                response_text += f"\n\n... y {len(thoughts) - 20} más"
+                
                 except Exception as e:
-                    logger.error(f"Error saving thought: {str(e)}", exc_info=True)
-                    response_text = f"❌ Error guardando el pensamiento: {str(e)}"
+                    logger.error(f"Error querying thoughts: {str(e)}", exc_info=True)
+                    response_text = f"❌ Error consultando recordatorios: {str(e)}"
+            
+            else:
+                # SAVE MODE: User wants to save a thought/reminder/idea/note
+                logger.info(f"Detected save request in REMINDER layer")
+                
+                # Extract type from description
+                thought_type = "thought"  # default
+                
+                if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                    thought_type = "reminder"
+                elif "idea" in desc_lower:
+                    thought_type = "idea"
+                elif "nota" in desc_lower or "note" in desc_lower:
+                    thought_type = "note"
+                elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                    thought_type = "thought"
+                
+                # Extract date if mentioned (for reminders)
+                reminder_date = None
+                from datetime import datetime, timedelta
+                if "mañana" in desc_lower or "tomorrow" in desc_lower:
+                    reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
+                elif "hoy" in desc_lower or "today" in desc_lower:
+                    reminder_date = datetime.now().date().isoformat()
+                
+                # Extract content - mejor lógica para preservar el contenido
+                content = user_text.strip()
+                
+                # Remover comandos del inicio de manera más inteligente
+                content_lower = content.lower()
+                
+                # Patrones comunes al inicio
+                if content_lower.startswith("guarda esta idea "):
+                    content = content[17:].strip()
+                elif content_lower.startswith("guarda este idea "):
+                    content = content[17:].strip()
+                elif content_lower.startswith("guarda esta "):
+                    content = content[12:].strip()
+                elif content_lower.startswith("guarda este "):
+                    content = content[12:].strip()
+                elif content_lower.startswith("guarda idea "):
+                    content = content[12:].strip()
+                elif content_lower.startswith("guarda recordatorio "):
+                    content = content[20:].strip()
+                elif content_lower.startswith("guarda pensamiento "):
+                    content = content[19:].strip()
+                elif content_lower.startswith("guarda nota "):
+                    content = content[12:].strip()
+                elif content_lower.startswith("guarda "):
+                    content = content[7:].strip()
+                
+                # Remover "en la base de datos" si está presente
+                content = content.replace("en la base de datos", "").replace("en la bd", "").strip()
+                content = content.replace(":", "").strip()  # Remover dos puntos al final
+                
+                # Si después de remover el comando no queda nada, usar el texto original
+                if not content or len(content.strip()) == 0:
+                    content = user_text.strip()
+                    # Remover solo "guarda" del inicio si está
+                    if content_lower.startswith("guarda "):
+                        content = content[7:].strip()
+                    # Si aún está vacío, usar el texto completo
+                    if not content:
+                        content = user_text.strip()
+                
+                # Validar que content no esté vacío
+                if not content or len(content.strip()) == 0:
+                    content = user_text.strip()  # Usar el texto original como último recurso
+                    if not content:
+                        content = "Sin contenido"  # Fallback mínimo
+                
+                logger.info(f"Final content to save: '{content}' (length: {len(content)})")
+                
+                # Ensure chat_id is an integer
+                chat_id_int = int(chat_id) if chat_id else None
+                if not chat_id_int:
+                    response_text = f"Error: Invalid chat_id: {chat_id}"
+                else:
+                    logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
+                    
+                    try:
+                        # Save thought/reminder
+                        saved = await save_thought_reminder(
+                            chat_id=chat_id_int,
+                            content=content,
+                            thought_type=thought_type,
+                            reminder_date=reminder_date
+                        )
+                        
+                        logger.info(f"Successfully saved thought - Response from DB: {saved}")
+                        if not saved or (isinstance(saved, dict) and not saved.get('id')):
+                            logger.warning(f"Save operation may have failed - no ID returned: {saved}")
+                        
+                        type_names = {
+                            "reminder": "recordatorio",
+                            "idea": "idea",
+                            "note": "nota",
+                            "thought": "pensamiento"
+                        }
+                        type_name = type_names.get(thought_type, "pensamiento")
+                        
+                        response_text = f"✅ Guardado exitosamente\n\n{type_name.capitalize()}: {content}"
+                        if reminder_date:
+                            response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
+                    except Exception as e:
+                        logger.error(f"Error saving thought: {str(e)}", exc_info=True)
+                        response_text = f"❌ Error guardando el pensamiento: {str(e)}"
         
         elif intent == "MENTORSHIP":
             # Route to Mentorship Layer - 100% mentoria, sin contexto financiero
