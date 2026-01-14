@@ -148,7 +148,7 @@ async def webhook(request: Request):
         except Exception as e:
             logger.warning(f"Could not retrieve conversation history: {str(e)}")
         
-        # Step 2: Analyze intent (Router Layer)
+        # Step 2: Analyze intent (Router Layer) - Now returns FINANCE, MENTORSHIP, or REMINDER
         logger.info(f"Analyzing intent for message: {user_text}")
         intent = analyze_intent(user_text)
         logger.info(f"Intent: {intent}")
@@ -156,32 +156,130 @@ async def webhook(request: Request):
         response_text = ""
         
         # Step 3: Route to appropriate layer
-        if intent == "MENTORSHIP":
+        if intent == "REMINDER":
+            # Route to Reminder Layer - handles saving thoughts/ideas/reminders/notes
+            logger.info(f"Routing to Reminder Layer")
+            
+            # Extract type from description
+            desc_lower = user_text.lower()
+            thought_type = "thought"  # default
+            
+            if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                thought_type = "reminder"
+            elif "idea" in desc_lower:
+                thought_type = "idea"
+            elif "nota" in desc_lower or "note" in desc_lower:
+                thought_type = "note"
+            elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                thought_type = "thought"
+            
+            # Extract date if mentioned (for reminders)
+            reminder_date = None
+            from datetime import datetime, timedelta
+            if "mañana" in desc_lower or "tomorrow" in desc_lower:
+                reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
+            elif "hoy" in desc_lower or "today" in desc_lower:
+                reminder_date = datetime.now().date().isoformat()
+            
+            # Extract content - mejor lógica para preservar el contenido
+            content = user_text.strip()
+            
+            # Remover comandos del inicio de manera más inteligente
+            content_lower = content.lower()
+            
+            # Patrones comunes al inicio
+            if content_lower.startswith("guarda esta idea "):
+                content = content[17:].strip()
+            elif content_lower.startswith("guarda este idea "):
+                content = content[17:].strip()
+            elif content_lower.startswith("guarda esta "):
+                content = content[12:].strip()
+            elif content_lower.startswith("guarda este "):
+                content = content[12:].strip()
+            elif content_lower.startswith("guarda idea "):
+                content = content[12:].strip()
+            elif content_lower.startswith("guarda recordatorio "):
+                content = content[20:].strip()
+            elif content_lower.startswith("guarda pensamiento "):
+                content = content[19:].strip()
+            elif content_lower.startswith("guarda nota "):
+                content = content[12:].strip()
+            elif content_lower.startswith("guarda "):
+                content = content[7:].strip()
+            
+            # Remover "en la base de datos" si está presente
+            content = content.replace("en la base de datos", "").replace("en la bd", "").strip()
+            content = content.replace(":", "").strip()  # Remover dos puntos al final
+            
+            # Si después de remover el comando no queda nada, usar el texto original
+            if not content or len(content.strip()) == 0:
+                content = user_text.strip()
+                # Remover solo "guarda" del inicio si está
+                if content_lower.startswith("guarda "):
+                    content = content[7:].strip()
+                # Si aún está vacío, usar el texto completo
+                if not content:
+                    content = user_text.strip()
+            
+            # Validar que content no esté vacío
+            if not content or len(content.strip()) == 0:
+                content = user_text.strip()  # Usar el texto original como último recurso
+                if not content:
+                    content = "Sin contenido"  # Fallback mínimo
+            
+            logger.info(f"Final content to save: '{content}' (length: {len(content)})")
+            
+            # Ensure chat_id is an integer
+            chat_id_int = int(chat_id) if chat_id else None
+            if not chat_id_int:
+                response_text = f"Error: Invalid chat_id: {chat_id}"
+            else:
+                logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
+                
+                try:
+                    # Save thought/reminder
+                    saved = await save_thought_reminder(
+                        chat_id=chat_id_int,
+                        content=content,
+                        thought_type=thought_type,
+                        reminder_date=reminder_date
+                    )
+                    
+                    logger.info(f"Successfully saved thought - Response from DB: {saved}")
+                    if not saved or (isinstance(saved, dict) and not saved.get('id')):
+                        logger.warning(f"Save operation may have failed - no ID returned: {saved}")
+                    
+                    type_names = {
+                        "reminder": "recordatorio",
+                        "idea": "idea",
+                        "note": "nota",
+                        "thought": "pensamiento"
+                    }
+                    type_name = type_names.get(thought_type, "pensamiento")
+                    
+                    response_text = f"✅ Guardado exitosamente\n\n{type_name.capitalize()}: {content}"
+                    if reminder_date:
+                        response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
+                except Exception as e:
+                    logger.error(f"Error saving thought: {str(e)}", exc_info=True)
+                    response_text = f"❌ Error guardando el pensamiento: {str(e)}"
+        
+        elif intent == "MENTORSHIP":
             # Route to Mentorship Layer - 100% mentoria, sin contexto financiero
+            logger.info(f"Routing to Mentorship Layer")
             try:
                 response_text = generate_mentorship_advice(user_text, conversation_history=conversation_history)
             except Exception as e:
                 logger.error(f"Error generating mentorship advice: {str(e)}")
                 response_text = f"Error procesando tu mensaje: {str(e)}"
         
-        else:
+        else:  # intent == "FINANCE"
             # Route to Finance Layer (CFO)
             logger.info(f"Routing to Finance Layer")
             
-            # Detección directa de comandos "guarda" antes del LLM
-            user_lower = user_text.lower().strip()
-            if user_lower.startswith("guarda") or "guarda esta" in user_lower or "guarda este" in user_lower:
-                # Forzar acción save_thought directamente
-                classification = {
-                    "action": "save_thought",
-                    "amount": 0,
-                    "category": None,
-                    "description": user_text
-                }
-                logger.info(f"Detected 'guarda' command directly - user_text: {user_text}, forcing save_thought action")
-            else:
-                classification = classify_financial_action(user_text)
-                logger.info(f"Classification from LLM: {classification}")
+            # Classify financial action (save_thought is now handled before intent analysis)
+            classification = classify_financial_action(user_text)
+            logger.info(f"Classification from LLM: {classification}")
             
             action = classification.get("action", "unknown")
             amount = float(classification.get("amount", 0))
@@ -617,116 +715,6 @@ async def webhook(request: Request):
                 except Exception as e:
                     logger.error(f"Error querying transactions: {str(e)}")
                     response_text = f"Error consultando transacciones: {str(e)}"
-            
-            elif action == "save_thought":
-                # User wants to save a thought, reminder, idea or note
-                try:
-                    logger.info(f"Saving thought - user_text: {user_text}, description: {description}")
-                    
-                    # Extract type from description
-                    desc_lower = description.lower() if description else user_text.lower()
-                    thought_type = "thought"  # default
-                    
-                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
-                        thought_type = "reminder"
-                    elif "idea" in desc_lower:
-                        thought_type = "idea"
-                    elif "nota" in desc_lower or "note" in desc_lower:
-                        thought_type = "note"
-                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
-                        thought_type = "thought"
-                    
-                    # Extract date if mentioned (for reminders)
-                    reminder_date = None
-                    from datetime import datetime, timedelta
-                    if "mañana" in desc_lower or "tomorrow" in desc_lower:
-                        reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
-                    elif "hoy" in desc_lower or "today" in desc_lower:
-                        reminder_date = datetime.now().date().isoformat()
-                    
-                    # Extract content - mejor lógica para preservar el contenido
-                    content = user_text.strip()
-                    
-                    # Remover comandos del inicio de manera más inteligente
-                    content_lower = content.lower()
-                    
-                    # Patrones comunes al inicio
-                    if content_lower.startswith("guarda esta idea "):
-                        content = content[17:].strip()
-                    elif content_lower.startswith("guarda este idea "):
-                        content = content[17:].strip()
-                    elif content_lower.startswith("guarda esta "):
-                        content = content[12:].strip()
-                    elif content_lower.startswith("guarda este "):
-                        content = content[12:].strip()
-                    elif content_lower.startswith("guarda idea "):
-                        content = content[12:].strip()
-                    elif content_lower.startswith("guarda recordatorio "):
-                        content = content[20:].strip()
-                    elif content_lower.startswith("guarda pensamiento "):
-                        content = content[19:].strip()
-                    elif content_lower.startswith("guarda nota "):
-                        content = content[12:].strip()
-                    elif content_lower.startswith("guarda "):
-                        content = content[7:].strip()
-                    
-                    # Si después de remover el comando no queda nada, usar el texto original
-                    if not content or len(content.strip()) == 0:
-                        # Si description es diferente y tiene contenido, usarlo
-                        if description and description.strip() and description != user_text:
-                            content = description.strip()
-                        else:
-                            # Usar el texto original sin el comando inicial
-                            content = user_text.strip()
-                            # Remover solo "guarda" del inicio si está
-                            if content_lower.startswith("guarda "):
-                                content = content[7:].strip()
-                            # Si aún está vacío, usar el texto completo
-                            if not content:
-                                content = user_text.strip()
-                    
-                    # Validar que content no esté vacío
-                    if not content or len(content.strip()) == 0:
-                        content = user_text.strip()  # Usar el texto original como último recurso
-                        if not content:
-                            content = "Sin contenido"  # Fallback mínimo
-                    
-                    logger.info(f"Final content to save: '{content}' (length: {len(content)})")
-                    
-                    # Ensure chat_id is an integer
-                    chat_id_int = int(chat_id) if chat_id else None
-                    if not chat_id_int:
-                        raise ValueError(f"Invalid chat_id: {chat_id}")
-                    
-                    logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
-                    
-                    # Save thought/reminder
-                    saved = await save_thought_reminder(
-                        chat_id=chat_id_int,
-                        content=content,
-                        thought_type=thought_type,
-                        reminder_date=reminder_date
-                    )
-                    
-                    logger.info(f"Successfully saved thought - Response from DB: {saved}")
-                    if not saved or (isinstance(saved, dict) and not saved.get('id')):
-                        logger.warning(f"Save operation may have failed - no ID returned: {saved}")
-                    
-                    type_names = {
-                        "reminder": "recordatorio",
-                        "idea": "idea",
-                        "note": "nota",
-                        "thought": "pensamiento"
-                    }
-                    type_name = type_names.get(thought_type, "pensamiento")
-                    
-                    response_text = f"✅ Guardado exitosamente\n\n{type_name.capitalize()}: {content}"
-                    if reminder_date:
-                        response_text += f"\n\n📅 Recordatorio para: {reminder_date}"
-                    
-                except Exception as e:
-                    logger.error(f"Error saving thought: {str(e)}", exc_info=True)
-                    response_text = f"Error guardando el pensamiento: {str(e)}"
             
             elif action == "query_thoughts":
                 # User wants to query thoughts/reminders

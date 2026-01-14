@@ -44,8 +44,22 @@ VALID_CATEGORIES = [
 def analyze_intent(user_message: str) -> str:
     """
     LAYER 1: The Gatekeeper.
-    Decides if the user needs the CFO (Finance) or the Mentor (Psychology/Strategy).
+    Decides if the user needs the CFO (Finance), the Mentor (Psychology/Strategy), or Reminder (Save thoughts/ideas).
     """
+    # PRIORIDAD 1: Detectar comandos "guarda" -> REMINDER
+    user_lower = user_message.lower().strip()
+    if (
+        user_lower.startswith("guarda") or 
+        "guarda esta" in user_lower or 
+        "guarda este" in user_lower or
+        "guarda idea" in user_lower or
+        "guarda recordatorio" in user_lower or
+        "guarda pensamiento" in user_lower or
+        "guarda nota" in user_lower
+    ):
+        return "REMINDER"
+    
+    # Si no es REMINDER, usar LLM para clasificar entre FINANCE y MENTORSHIP
     system_prompt = """Eres el sistema de triaje mental de un CEO. Tu única misión es redirigir el mensaje.
 
 CLASIFICACIÓN:
@@ -115,20 +129,17 @@ ACCIONES VÁLIDAS:
 - "close_month": Cierre de mes.
 - "consult_spending": Pregunta "¿Debería comprar X?" (Evaluación financiera).
 - "query_transaction": Pregunta sobre transacciones pasadas (ej: "¿Cuánto gasté en X?", "¿Cuándo gasté Y?", "¿Qué gastos hice esta semana?").
-- "save_thought": Guardar pensamiento, recordatorio, idea o nota (ej: "guarda este recordatorio", "guarda esta idea", "guarda este pensamiento").
 - "query_thoughts": Consultar pensamientos/recordatorios (ej: "muéstrame mis recordatorios de hoy", "¿qué pensamientos guardé ayer?").
 
 REGLAS DE CLASIFICACIÓN (EN ORDEN DE PRIORIDAD):
-1. PRIORIDAD ALTA: Si el mensaje comienza con "guarda" o contiene "guarda este" o "guarda esta" -> SIEMPRE action: "save_thought". No importa qué más diga.
-2. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
-3. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
-4. Ante duda entre networking y stupid -> stupid_expenses.
-5. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
-6. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
-7. Comandos para guardar pensamientos ("guarda este recordatorio", "guarda esta idea", "guarda este pensamiento", "guarda esta nota") -> action: "save_thought". Detecta el tipo desde las palabras clave.
-8. Consultas sobre pensamientos ("muéstrame mis recordatorios", "¿qué pensamientos guardé?", "recordatorios de hoy") -> action: "query_thoughts".
+1. Si menciona "Lumni/Icetex" y "Extra/Abono" -> debt_offensive.
+2. Si menciona "Lumni/Icetex" y nada más (cuota normal) -> fixed_survival.
+3. Ante duda entre networking y stupid -> stupid_expenses.
+4. "Consultar gastos" o "¿puedo gastar?" -> action: "consult_spending".
+5. Pregunta sobre transacciones pasadas ("¿cuánto gasté?", "¿qué gastos?", "¿cuándo?", "muéstrame") -> action: "query_transaction".
+6. Consultas sobre pensamientos ("muéstrame mis recordatorios", "¿qué pensamientos guardé?", "recordatorios de hoy") -> action: "query_thoughts".
 
-IMPORTANTE: Si el usuario dice "guarda" o "guarda esta" o "guarda este", SIEMPRE debe ser "save_thought". El contenido después de "guarda" va en "description".
+NOTA: Los comandos "guarda" se manejan en otra capa (REMINDER), no llegan aquí.
 
 Responde SOLO JSON:
 {
