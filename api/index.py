@@ -15,7 +15,8 @@ from core.brain import (
     generate_cfo_response,
     generate_spending_advice,
     generate_mentorship_advice,
-    generate_transaction_query_response
+    generate_transaction_query_response,
+    generate_operational_response
 )
 from core.db import (
     insert_transaction, 
@@ -33,7 +34,10 @@ from core.db import (
     get_transactions,
     save_thought_reminder,
     get_thoughts_reminders,
-    update_thought_completed
+    update_thought_completed,
+    get_pending_schedule_reminders,
+    mark_reminder_sent,
+    ensure_default_reminders_for_chat,
 )
 from core.telegram import send_message
 
@@ -219,6 +223,107 @@ async def root():
     return {"status": "ok", "service": "Kepler CFO"}
 
 
+@app.get("/api/cron/reminders/status")
+async def cron_reminders_status():
+    """
+    Debug: muestra hora actual, timezone, y cuántos recordatorios hay.
+    No envía nada, solo información.
+    """
+    from datetime import datetime, timezone
+    try:
+        tz_name = os.getenv("KEPLER_TZ", "America/Bogota")
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            tz = timezone.utc
+        now = datetime.now(tz)
+        current_date = now.date().isoformat()
+        current_weekday = now.weekday()
+
+        # Contar recordatorios en BD (sin filtrar por hora)
+        headers = {
+            "apikey": os.getenv("SUPABASE_KEY"),
+            "Authorization": f"Bearer {os.getenv('SUPABASE_KEY')}",
+        }
+        import httpx
+        url = f"{os.getenv('SUPABASE_URL').rstrip('/')}/rest/v1/schedule_reminders"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, params={"select": "id,chat_id,hour,minute,days_of_week"}, headers=headers)
+            total_in_db = len(r.json()) if r.status_code == 200 and isinstance(r.json(), list) else 0
+
+        pending = await get_pending_schedule_reminders(
+            current_hour=now.hour,
+            current_minute=now.minute,
+            current_weekday=current_weekday,
+            current_date=current_date,
+        )
+
+        return {
+            "status": "ok",
+            "now": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "tz": tz_name,
+            "weekday": current_weekday,
+            "date": current_date,
+            "total_reminders_in_db": total_in_db,
+            "pending_right_now": len(pending),
+            "would_send": [{"chat_id": r.get("chat_id"), "message_preview": (r.get("message", "")[:40] + "...")} for r in pending],
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.api_route("/api/cron/reminders", methods=["GET", "POST"])
+async def cron_reminders(request: Request):
+    """
+    Endpoint para recordatorios proactivos. Llamado por cron cada 15 min.
+    Envía recordatorios según el horario del Plan Kepler.
+    Protegido por CRON_SECRET en header o query.
+    """
+    from datetime import datetime
+    try:
+        cron_secret = os.getenv("CRON_SECRET")
+        if cron_secret:
+            auth = request.headers.get("Authorization") or request.query_params.get("secret", "")
+            if auth != f"Bearer {cron_secret}" and auth != cron_secret:
+                raise HTTPException(status_code=403, detail="Unauthorized")
+        
+        tz_name = os.getenv("KEPLER_TZ", "America/Bogota")
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            from datetime import timezone
+            tz = timezone.utc
+        now = datetime.now(tz)
+        current_date = now.date().isoformat()
+        current_weekday = now.weekday()  # 0=Monday, 6=Sunday
+        
+        pending = await get_pending_schedule_reminders(
+            current_hour=now.hour,
+            current_minute=now.minute,
+            current_weekday=current_weekday,
+            current_date=current_date
+        )
+        
+        sent = 0
+        for rem in pending:
+            chat_id = rem.get("chat_id")
+            message = rem.get("message", "")
+            rem_id = rem.get("id")
+            if chat_id and message:
+                await send_message(chat_id=int(chat_id), text=message)
+                await mark_reminder_sent(rem_id, current_date)
+                sent += 1
+        
+        return JSONResponse({"status": "ok", "sent": sent, "total": len(pending)})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Cron reminders error: {str(e)}", exc_info=True)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+
 @app.post("/api/webhook")
 async def webhook(request: Request):
     """
@@ -266,10 +371,10 @@ async def webhook(request: Request):
                 "response": "Por favor, envía un mensaje de texto. Ejemplo: 'Gasté 50000 en comida'"
             })
         
-        # Step 1: Get conversation history (6-9 recent messages)
+        # Step 1: Get conversation history (más mensajes para mentoría y operativo)
         conversation_history = []
         try:
-            conversation_history = await get_conversation_history(chat_id, limit=8)
+            conversation_history = await get_conversation_history(chat_id, limit=20)
             logger.info(f"Retrieved {len(conversation_history)} messages from history")
         except Exception as e:
             logger.warning(f"Could not retrieve conversation history: {str(e)}")
@@ -546,6 +651,40 @@ async def webhook(request: Request):
             except Exception as e:
                 logger.error(f"Error generating mentorship advice: {str(e)}")
                 response_text = f"Error procesando tu mensaje: {str(e)}"
+        
+        elif intent == "OPERATIONAL":
+            # Route to Operational Layer - gestión del tiempo, plan Kepler, reorganización
+            logger.info(f"Routing to Operational Layer")
+            try:
+                chat_id_int = int(chat_id) if chat_id else None
+                user_lower = user_text.lower().strip()
+                activate_keywords = ["activar recordatorios", "activa recordatorios", "quiero recordatorios", "activa los recordatorios", "recordatorios del plan"]
+                if chat_id_int and any(kw in user_lower for kw in activate_keywords):
+                    inserted = await ensure_default_reminders_for_chat(chat_id_int)
+                    if inserted > 0:
+                        response_text = f"✅ Recordatorios activados. Te enviaré {inserted} recordatorios según tu plan (5:50, 6:00, 8:00, 5PM, 10PM, y domingo música). Configura un cron que llame a /api/cron/reminders cada 15 min."
+                    else:
+                        response_text = "Ya tienes los recordatorios activados. Te llegarán según el horario del plan."
+                else:
+                    thoughts_context = []
+                    if chat_id_int:
+                        thoughts_context = await get_thoughts_reminders(
+                            chat_id=chat_id_int,
+                            date=None,
+                            thought_type=None,
+                            limit=10
+                        )
+                    response_text = generate_operational_response(
+                        user_message=user_text,
+                        conversation_history=conversation_history,
+                        thoughts_context=thoughts_context
+                    )
+            except Exception as e:
+                logger.error(f"Error generating operational response: {str(e)}", exc_info=True)
+                if "schedule_reminders" in str(e).lower() or "relation" in str(e).lower():
+                    response_text = "Primero crea la tabla schedule_reminders en Supabase (database/schedule_reminders.sql) y vuelve a intentar."
+                else:
+                    response_text = f"Error procesando tu mensaje operativo: {str(e)}"
         
         else:  # intent == "FINANCE"
             # Route to Finance Layer (CFO)

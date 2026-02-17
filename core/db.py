@@ -601,8 +601,8 @@ async def get_conversation_history(chat_id: int, limit: int = 8) -> list[Dict[st
         List of conversation messages (most recent first)
     """
     try:
-        # Ensure limit is between 6-9
-        limit = max(6, min(9, limit))
+        # Allow 6-30 messages (more for mentorship/operational context)
+        limit = max(6, min(30, limit))
         
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/conversation_history"
@@ -829,4 +829,155 @@ async def update_thought_completed(thought_id: str, is_completed: bool = True) -
             return result[0] if isinstance(result, list) and result else result
     except Exception as e:
         raise Exception(f"Error updating thought completion status: {str(e)}")
+
+
+# ============================================
+# SCHEDULE REMINDERS FUNCTIONS (Recordatorios proactivos)
+# ============================================
+
+async def get_pending_schedule_reminders(
+    current_hour: int,
+    current_minute: int,
+    current_weekday: int,
+    current_date: str
+) -> list:
+    """
+    Get reminders that should be sent now.
+    Matches reminders where (hour, minute) is within 15 min of current time,
+    current_weekday is in days_of_week, and last_sent_date != today.
+    
+    Args:
+        current_hour: 0-23
+        current_minute: 0-59
+        current_weekday: 0=Monday, 6=Sunday
+        current_date: 'YYYY-MM-DD'
+    
+    Returns:
+        List of reminder dicts to send
+    """
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/schedule_reminders"
+        params = {"enabled": "eq.true"}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            reminders = response.json()
+        
+        if not isinstance(reminders, list):
+            return []
+        
+        current_slot = current_hour * 60 + current_minute
+        pending = []
+        
+        for r in reminders:
+            days_str = str(r.get("days_of_week", ""))
+            if not days_str:
+                continue
+            days = [int(d.strip()) for d in days_str.split(",") if d.strip().isdigit()]
+            if current_weekday not in days:
+                continue
+            
+            last_sent = r.get("last_sent_date")
+            if last_sent and str(last_sent) == current_date:
+                continue
+            
+            rem_hour = int(r.get("hour", 0))
+            rem_minute = int(r.get("minute", 0))
+            rem_slot = rem_hour * 60 + rem_minute
+            diff = abs(current_slot - rem_slot)
+            if diff <= 15:
+                pending.append(r)
+        
+        return pending
+    except Exception as e:
+        logger.error(f"Error getting pending reminders: {str(e)}")
+        return []
+
+
+async def mark_reminder_sent(reminder_id: str, sent_date: str) -> bool:
+    """Update last_sent_date after sending a reminder."""
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/schedule_reminders"
+        params = {"id": f"eq.{reminder_id}"}
+        data = {"last_sent_date": sent_date}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.patch(url, params=params, json=data, headers=headers)
+            response.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"Error marking reminder sent: {str(e)}")
+        return False
+
+
+DEFAULT_SCHEDULE_REMINDERS = [
+    (5, 50, "0,1,2,3,4", "⏰ 5:50 - Pie en tierra. Agua fría. Sin celular.", "wake_up"),
+    (6, 0, "0,1,2,3,4", "🔴 6:00 - BLOQUE ROJO (Stateless Palantir). Innegociable.", "bloque_rojo"),
+    (8, 0, "0,1,2,3,4", "🏃 8:00 - Ejercicio o preparación para Trii.", "exercise"),
+    (17, 0, "0,1,2,3,4", "🔄 5:00 PM - Transición / Ejercicio (si no en mañana).", "transition"),
+    (22, 0, "0,1,2,3,4,5,6", "📖 10:00 PM - Lectura. Libro físico, sin pantallas.", "reading"),
+    (14, 0, "6", "🎵 2:00 PM - Bloque de MÚSICA (Reaper). 2-3 horas.", "music"),
+]
+
+
+async def ensure_default_reminders_for_chat(chat_id: int) -> int:
+    """
+    Inserta los recordatorios por defecto del Plan Kepler para un chat_id.
+    Solo inserta si no existen ya para ese chat.
+    Returns: número de recordatorios insertados.
+    """
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/schedule_reminders"
+        params = {"chat_id": f"eq.{chat_id}"}
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            existing_list = data if isinstance(data, list) else []
+        if len(existing_list) >= 3:  # Ya tiene recordatorios
+            return 0
+        inserted = 0
+        for hour, minute, days, message, rem_type in DEFAULT_SCHEDULE_REMINDERS:
+            data = {
+                "chat_id": chat_id,
+                "hour": hour,
+                "minute": minute,
+                "days_of_week": days,
+                "message": message,
+                "reminder_type": rem_type,
+                "enabled": True,
+            }
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json=data, headers=headers)
+                if resp.status_code in (200, 201):
+                    inserted += 1
+        return inserted
+    except Exception as e:
+        logger.error(f"Error ensuring default reminders: {str(e)}")
+        return 0
+
+
+async def get_registered_chat_ids() -> list:
+    """Get distinct chat_ids that have reminders enabled."""
+    try:
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/schedule_reminders"
+        params = {"enabled": "eq.true", "select": "chat_id"}
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+        
+        if not isinstance(result, list):
+            return []
+        chat_ids = list(set(int(r["chat_id"]) for r in result if r.get("chat_id") is not None))
+        return chat_ids
+    except Exception as e:
+        logger.error(f"Error getting chat ids: {str(e)}")
+        return []
 
