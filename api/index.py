@@ -482,29 +482,54 @@ async def webhook(request: Request):
                                     }
                                     type_msg = f" {type_names.get(query_thought_type, 'elementos')}"
                                 response_text = f"📭 No encontré{type_msg}{date_msg}."
-                        else:
-                            # Format response
-                            type_names = {
-                                "reminder": "📅 Recordatorio",
-                                "idea": "💡 Idea",
-                                "note": "📝 Nota",
-                                "thought": "💭 Pensamiento"
-                            }
-                            
-                            # Group by type if no specific type filter
-                            if not query_thought_type:
-                                grouped = {}
-                                for thought in thoughts:
-                                    t_type = thought.get("type", "thought")
-                                    if t_type not in grouped:
-                                        grouped[t_type] = []
-                                    grouped[t_type].append(thought)
+                            else:
+                                # Format response
+                                type_names = {
+                                    "reminder": "📅 Recordatorio",
+                                    "idea": "💡 Idea",
+                                    "note": "📝 Nota",
+                                    "thought": "💭 Pensamiento"
+                                }
                                 
-                                response_parts = []
-                                for t_type, items in grouped.items():
-                                    type_name = type_names.get(t_type, "📌 Elemento")
-                                    response_parts.append(f"\n{type_name} ({len(items)}):")
-                                    for item in items[:10]:  # Max 10 per type
+                                # Group by type if no specific type filter
+                                if not query_thought_type:
+                                    grouped = {}
+                                    for thought in thoughts:
+                                        t_type = thought.get("type", "thought")
+                                        if t_type not in grouped:
+                                            grouped[t_type] = []
+                                        grouped[t_type].append(thought)
+                                    
+                                    response_parts = []
+                                    for t_type, items in grouped.items():
+                                        type_name = type_names.get(t_type, "📌 Elemento")
+                                        response_parts.append(f"\n{type_name} ({len(items)}):")
+                                        for item in items[:10]:  # Max 10 per type
+                                            content = item.get("content", "Sin contenido")
+                                            created = item.get("created_at", "")
+                                            reminder_date_str = item.get("reminder_date", "")
+                                            
+                                            # Format date
+                                            date_str = ""
+                                            if reminder_date_str:
+                                                date_str = f" [📅 {reminder_date_str}]"
+                                            elif created:
+                                                try:
+                                                    from datetime import datetime
+                                                    created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
+                                                    date_str = f" [{created_dt.strftime('%d/%m/%Y')}]"
+                                                except:
+                                                    pass
+                                            
+                                            response_parts.append(f"  • {content}{date_str}")
+                                    
+                                    response_text = "📋 Tus recordatorios/pensamientos:\n" + "\n".join(response_parts)
+                                else:
+                                    # Single type, show all
+                                    type_name = type_names.get(query_thought_type, "📌 Elemento")
+                                    response_parts = [f"\n{type_name} ({len(thoughts)}):"]
+                                    
+                                    for item in thoughts[:20]:  # Max 20 items
                                         content = item.get("content", "Sin contenido")
                                         created = item.get("created_at", "")
                                         reminder_date_str = item.get("reminder_date", "")
@@ -522,37 +547,12 @@ async def webhook(request: Request):
                                                 pass
                                         
                                         response_parts.append(f"  • {content}{date_str}")
-                                
-                                response_text = "📋 Tus recordatorios/pensamientos:\n" + "\n".join(response_parts)
-                            else:
-                                # Single type, show all
-                                type_name = type_names.get(query_thought_type, "📌 Elemento")
-                                response_parts = [f"\n{type_name} ({len(thoughts)}):"]
-                                
-                                for item in thoughts[:20]:  # Max 20 items
-                                    content = item.get("content", "Sin contenido")
-                                    created = item.get("created_at", "")
-                                    reminder_date_str = item.get("reminder_date", "")
                                     
-                                    # Format date
-                                    date_str = ""
-                                    if reminder_date_str:
-                                        date_str = f" [📅 {reminder_date_str}]"
-                                    elif created:
-                                        try:
-                                            from datetime import datetime
-                                            created_dt = datetime.fromisoformat(created.replace('Z', '+00:00'))
-                                            date_str = f" [{created_dt.strftime('%d/%m/%Y')}]"
-                                        except:
-                                            pass
-                                    
-                                    response_parts.append(f"  • {content}{date_str}")
+                                    response_text = f"📋 {type_name}s encontrados:\n" + "\n".join(response_parts)
                                 
-                                response_text = f"📋 {type_name}s encontrados:\n" + "\n".join(response_parts)
-                            
-                            if len(thoughts) > 20:
-                                response_text += f"\n\n... y {len(thoughts) - 20} más"
-                
+                                if len(thoughts) > 20:
+                                    response_text += f"\n\n... y {len(thoughts) - 20} más"
+                    
                     except Exception as e:
                         logger.error(f"Error querying thoughts: {str(e)}", exc_info=True)
                         response_text = f"❌ Error consultando recordatorios: {str(e)}"
@@ -1175,7 +1175,7 @@ async def webhook(request: Request):
                     
                     # Get thoughts/reminders
                     thoughts = await get_thoughts_reminders(
-                        chat_id=chat_id,
+                        chat_id=int(chat_id) if chat_id else 0,
                         date=date_filter,
                         thought_type=thought_type,
                         limit=30

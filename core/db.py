@@ -595,7 +595,7 @@ async def get_conversation_history(chat_id: int, limit: int = 8) -> list[Dict[st
     
     Args:
         chat_id: Telegram chat ID
-        limit: Number of recent messages to retrieve (default: 8, range: 6-9)
+        limit: Number of recent messages to retrieve (default: 8, range: 6-30)
         
     Returns:
         List of conversation messages (most recent first)
@@ -977,7 +977,7 @@ async def save_custom_schedule_reminder(
 ) -> Optional[Dict[str, Any]]:
     """
     Inserta un recordatorio personalizado (ej: "recuérdame a las 4 tal cosa").
-    specific_date: 'YYYY-MM-DD' para uno único, o None para hoy (usa days_of_week del día actual).
+    specific_date: 'YYYY-MM-DD' para uno único (ej. mañana). Si es None, se usa la fecha de hoy = recordatorio único para hoy.
     """
     try:
         from datetime import datetime
@@ -990,6 +990,7 @@ async def save_custom_schedule_reminder(
             now = datetime.now(timezone.utc)
         else:
             now = datetime.now(tz)
+        # Si no hay fecha específica (ej. "recuérdame a las 4") = recordatorio único para hoy
         target_date = specific_date if specific_date else now.date().isoformat()
         days_of_week = "0,1,2,3,4,5,6"
         data = {
@@ -1000,9 +1001,8 @@ async def save_custom_schedule_reminder(
             "message": message,
             "reminder_type": "custom",
             "enabled": True,
+            "specific_date": target_date,  # Siempre fijamos fecha: hoy o mañana = un solo envío
         }
-        if specific_date:
-            data["specific_date"] = specific_date
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/schedule_reminders"
         async with httpx.AsyncClient(timeout=30.0) as client:
