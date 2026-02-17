@@ -28,6 +28,61 @@ def get_openai_client():
         _client = OpenAI(api_key=api_key)
     return _client
 
+def parse_schedule_reminder(user_message: str) -> Optional[Dict[str, Any]]:
+    """
+    Extrae hora, minuto, mensaje y fecha de "recuérdame a las 4 que tengo reunión".
+    Returns: {hour, minute, message, specific_date} or None si no pudo parsear.
+    """
+    system_prompt = """Extrae de este mensaje la HORA y el MENSAJE del recordatorio.
+
+Ejemplos:
+- "recuérdame a las 4 que tengo reunión" -> hour=4, minute=0, message="que tengo reunión"
+- "recuerdame a las 3:30 tomar la pastilla" -> hour=3, minute=30, message="tomar la pastilla"
+- "recuérdame a las 10am llamar a mamá" -> hour=10, minute=0, message="llamar a mamá"
+- "recuérdame mañana a las 4pm reunión" -> hour=16, minute=0, message="reunión", specific_date="tomorrow"
+- "recuérdame a las 2 de la tarde hacer ejercicio" -> hour=14, minute=0, message="hacer ejercicio"
+
+Reglas: hour 0-23, minute 0-59. Si dice "pm" o "tarde/noche" y la hora es <12, suma 12.
+Si dice "mañana" -> specific_date="tomorrow". Si no, specific_date=null.
+Responde SOLO JSON: {"hour": N, "minute": N, "message": "texto", "specific_date": null o "tomorrow"}"""
+    try:
+        client = get_openai_client()
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message}
+            ],
+            temperature=0,
+            max_tokens=100
+        )
+        content = response.choices[0].message.content.strip()
+        if "```" in content:
+            content = content.split("```")[1].replace("json", "").strip()
+        result = json.loads(content)
+        hour = int(result.get("hour", 0))
+        minute = int(result.get("minute", 0))
+        message = str(result.get("message", "")).strip()
+        if not message:
+            message = "Recordatorio"
+        specific_date = result.get("specific_date")
+        if specific_date == "tomorrow":
+            from datetime import datetime, timedelta
+            tz_name = os.getenv("KEPLER_TZ", "America/Bogota")
+            try:
+                import pytz
+                tz = pytz.timezone(tz_name)
+                tomorrow = (datetime.now(tz) + timedelta(days=1)).date().isoformat()
+            except Exception:
+                tomorrow = (datetime.now() + timedelta(days=1)).date().isoformat()
+            specific_date = tomorrow
+        else:
+            specific_date = None
+        return {"hour": hour, "minute": minute, "message": message, "specific_date": specific_date}
+    except Exception:
+        return None
+
+
 # --- CONFIGURACIÓN FINANCIERA ESTRICTA ---
 VALID_CATEGORIES = [
     "fixed_survival",  # $1.714.300
@@ -59,6 +114,9 @@ def analyze_intent(user_message: str) -> str:
         "guarda recordatorio", "guarda pensamiento", "guarda nota"
     ]
     if any(keyword in user_lower for keyword in save_keywords):
+        return "REMINDER"
+    # Detectar recordatorio programado "recuérdame a las X"
+    if "recuérdame a las" in user_lower or "recuerdame a las" in user_lower or "recuerdame a la" in user_lower:
         return "REMINDER"
     
     # Si no es REMINDER, usar LLM para clasificar entre FINANCE, MENTORSHIP y OPERATIONAL

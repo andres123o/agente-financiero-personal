@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from core.brain import (
     analyze_intent,
+    parse_schedule_reminder,
     classify_financial_action,
     generate_cfo_response,
     generate_spending_advice,
@@ -38,6 +39,7 @@ from core.db import (
     get_pending_schedule_reminders,
     mark_reminder_sent,
     ensure_default_reminders_for_chat,
+    save_custom_schedule_reminder,
 )
 from core.telegram import send_message
 
@@ -311,9 +313,10 @@ async def cron_reminders(request: Request):
             chat_id = rem.get("chat_id")
             message = rem.get("message", "")
             rem_id = rem.get("id")
+            is_one_time = rem.get("specific_date") is not None
             if chat_id and message:
                 await send_message(chat_id=int(chat_id), text=message)
-                await mark_reminder_sent(rem_id, current_date)
+                await mark_reminder_sent(rem_id, current_date, is_one_time=is_one_time)
                 sent += 1
         
         return JSONResponse({"status": "ok", "sent": sent, "total": len(pending)})
@@ -393,74 +396,92 @@ async def webhook(request: Request):
             
             desc_lower = user_text.lower()
             
-            # Check if it starts with "reminder:" or "recordatorio:" prefix
-            query_text = user_text
-            if desc_lower.startswith("reminder:"):
-                query_text = user_text[9:].strip()  # Remove "reminder:"
-                desc_lower = query_text.lower()
-            elif desc_lower.startswith("recordatorio:"):
-                query_text = user_text[13:].strip()  # Remove "recordatorio:"
-                desc_lower = query_text.lower()
-            
-            # Detect if it's a query (starts with prefix) or save command
-            is_query = user_text.lower().startswith("reminder:") or user_text.lower().startswith("recordatorio:")
-            
-            if is_query:
-                # QUERY MODE: User wants to see reminders/thoughts
-                logger.info(f"Detected query request in REMINDER layer - query_text: '{query_text}'")
-                
-                try:
-                    # Parse date from query (use query_text which has the prefix removed)
-                    date_filter = parse_date_query(query_text)
-                    logger.info(f"Parsed date filter: {date_filter}")
-                    
-                    # Extract type filter if mentioned
-                    query_thought_type = None
-                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
-                        query_thought_type = "reminder"
-                    elif "idea" in desc_lower:
-                        query_thought_type = "idea"
-                    elif "nota" in desc_lower or "note" in desc_lower:
-                        query_thought_type = "note"
-                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
-                        query_thought_type = "thought"
-                    
-                    # Get thoughts/reminders
-                    chat_id_int = int(chat_id) if chat_id else None
-                    if not chat_id_int:
-                        response_text = f"Error: Invalid chat_id: {chat_id}"
+            # Custom schedule reminder: "recuérdame a las 4 tal cosa"
+            if ("recuérdame a las" in desc_lower or "recuerdame a las" in desc_lower or "recuerdame a la" in desc_lower) and chat_id:
+                parsed = parse_schedule_reminder(user_text)
+                if parsed:
+                    saved = await save_custom_schedule_reminder(
+                        chat_id=int(chat_id),
+                        hour=parsed["hour"],
+                        minute=parsed["minute"],
+                        message=parsed["message"],
+                        specific_date=parsed.get("specific_date"),
+                    )
+                    if saved:
+                        min_str = f":{parsed['minute']:02d}" if parsed["minute"] else ""
+                        fecha = f" el {parsed['specific_date']}" if parsed.get("specific_date") else ""
+                        response_text = f"✅ Listo. Te recordaré a las {parsed['hour']}{min_str}{fecha}: {parsed['message']}"
                     else:
-                        thoughts = await get_thoughts_reminders(
-                            chat_id=chat_id_int,
-                            date=date_filter,
-                            thought_type=query_thought_type,
-                            limit=50
-                        )
+                        response_text = "No pude guardar el recordatorio. Verifica que la tabla schedule_reminders tenga la columna specific_date (ejecuta database/add_specific_date.sql)."
+                else:
+                    response_text = "No entendí la hora. Ejemplo: recuérdame a las 4 que tengo reunión"
+            else:
+                # Check if it starts with "reminder:" or "recordatorio:" prefix
+                query_text = user_text
+                if desc_lower.startswith("reminder:"):
+                    query_text = user_text[9:].strip()  # Remove "reminder:"
+                    desc_lower = query_text.lower()
+                elif desc_lower.startswith("recordatorio:"):
+                    query_text = user_text[13:].strip()  # Remove "recordatorio:"
+                    desc_lower = query_text.lower()
+                
+                # Detect if it's a query (starts with prefix) or save command
+                is_query = user_text.lower().startswith("reminder:") or user_text.lower().startswith("recordatorio:")
+                
+                if is_query:
+                    # QUERY MODE: User wants to see reminders/thoughts
+                    logger.info(f"Detected query request in REMINDER layer - query_text: '{query_text}'")
+                    
+                    try:
+                        # Parse date from query (use query_text which has the prefix removed)
+                        date_filter = parse_date_query(query_text)
+                        logger.info(f"Parsed date filter: {date_filter}")
                         
-                        logger.info(f"Found {len(thoughts)} thoughts/reminders")
+                        # Extract type filter if mentioned
+                        query_thought_type = None
+                        if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                            query_thought_type = "reminder"
+                        elif "idea" in desc_lower:
+                            query_thought_type = "idea"
+                        elif "nota" in desc_lower or "note" in desc_lower:
+                            query_thought_type = "note"
+                        elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                            query_thought_type = "thought"
                         
-                        if not thoughts:
-                            # Formatear mensaje según el filtro
-                            date_msg = ""
-                            if date_filter:
-                                if date_filter == "today":
-                                    date_msg = " de hoy"
-                                elif date_filter == "yesterday":
-                                    date_msg = " de ayer"
-                                else:
-                                    date_msg = f" del {date_filter}"
+                        # Get thoughts/reminders
+                        chat_id_int = int(chat_id) if chat_id else None
+                        if not chat_id_int:
+                            response_text = f"Error: Invalid chat_id: {chat_id}"
+                        else:
+                            thoughts = await get_thoughts_reminders(
+                                chat_id=chat_id_int,
+                                date=date_filter,
+                                thought_type=query_thought_type,
+                                limit=50
+                            )
                             
-                            type_msg = ""
-                            if query_thought_type:
-                                type_names = {
-                                    "reminder": "recordatorios",
-                                    "idea": "ideas",
-                                    "note": "notas",
-                                    "thought": "pensamientos"
-                                }
-                                type_msg = f" {type_names.get(query_thought_type, 'elementos')}"
+                            logger.info(f"Found {len(thoughts)} thoughts/reminders")
                             
-                            response_text = f"📭 No encontré{type_msg}{date_msg}."
+                            if not thoughts:
+                                # Formatear mensaje según el filtro
+                                date_msg = ""
+                                if date_filter:
+                                    if date_filter == "today":
+                                        date_msg = " de hoy"
+                                    elif date_filter == "yesterday":
+                                        date_msg = " de ayer"
+                                    else:
+                                        date_msg = f" del {date_filter}"
+                                type_msg = ""
+                                if query_thought_type:
+                                    type_names = {
+                                        "reminder": "recordatorios",
+                                        "idea": "ideas",
+                                        "note": "notas",
+                                        "thought": "pensamientos"
+                                    }
+                                    type_msg = f" {type_names.get(query_thought_type, 'elementos')}"
+                                response_text = f"📭 No encontré{type_msg}{date_msg}."
                         else:
                             # Format response
                             type_names = {
@@ -532,88 +553,87 @@ async def webhook(request: Request):
                             if len(thoughts) > 20:
                                 response_text += f"\n\n... y {len(thoughts) - 20} más"
                 
-                except Exception as e:
-                    logger.error(f"Error querying thoughts: {str(e)}", exc_info=True)
-                    response_text = f"❌ Error consultando recordatorios: {str(e)}"
-            
-            else:
-                # SAVE MODE: User wants to save a thought/reminder/idea/note
-                logger.info(f"Detected save request in REMINDER layer")
-                
-                # Extract type from description
-                thought_type = "thought"  # default
-                
-                if "recordatorio" in desc_lower or "reminder" in desc_lower:
-                    thought_type = "reminder"
-                elif "idea" in desc_lower:
-                    thought_type = "idea"
-                elif "nota" in desc_lower or "note" in desc_lower:
-                    thought_type = "note"
-                elif "pensamiento" in desc_lower or "thought" in desc_lower:
-                    thought_type = "thought"
-                
-                # Extract date if mentioned (for reminders)
-                reminder_date = None
-                from datetime import datetime, timedelta
-                if "mañana" in desc_lower or "tomorrow" in desc_lower:
-                    reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
-                elif "hoy" in desc_lower or "today" in desc_lower:
-                    reminder_date = datetime.now().date().isoformat()
-                
-                # Extract content - mejor lógica para preservar el contenido
-                content = user_text.strip()
-                
-                # Remover comandos del inicio de manera más inteligente
-                content_lower = content.lower()
-                
-                # Patrones comunes al inicio
-                if content_lower.startswith("guarda esta idea "):
-                    content = content[17:].strip()
-                elif content_lower.startswith("guarda este idea "):
-                    content = content[17:].strip()
-                elif content_lower.startswith("guarda esta "):
-                    content = content[12:].strip()
-                elif content_lower.startswith("guarda este "):
-                    content = content[12:].strip()
-                elif content_lower.startswith("guarda idea "):
-                    content = content[12:].strip()
-                elif content_lower.startswith("guarda recordatorio "):
-                    content = content[20:].strip()
-                elif content_lower.startswith("guarda pensamiento "):
-                    content = content[19:].strip()
-                elif content_lower.startswith("guarda nota "):
-                    content = content[12:].strip()
-                elif content_lower.startswith("guarda "):
-                    content = content[7:].strip()
-                
-                # Remover "en la base de datos" si está presente
-                content = content.replace("en la base de datos", "").replace("en la bd", "").strip()
-                content = content.replace(":", "").strip()  # Remover dos puntos al final
-                
-                # Si después de remover el comando no queda nada, usar el texto original
-                if not content or len(content.strip()) == 0:
-                    content = user_text.strip()
-                    # Remover solo "guarda" del inicio si está
-                    if content_lower.startswith("guarda "):
-                        content = content[7:].strip()
-                    # Si aún está vacío, usar el texto completo
-                    if not content:
-                        content = user_text.strip()
-                
-                # Validar que content no esté vacío
-                if not content or len(content.strip()) == 0:
-                    content = user_text.strip()  # Usar el texto original como último recurso
-                    if not content:
-                        content = "Sin contenido"  # Fallback mínimo
-                
-                logger.info(f"Final content to save: '{content}' (length: {len(content)})")
-                
-                # Ensure chat_id is an integer
-                chat_id_int = int(chat_id) if chat_id else None
-                if not chat_id_int:
-                    response_text = f"Error: Invalid chat_id: {chat_id}"
+                    except Exception as e:
+                        logger.error(f"Error querying thoughts: {str(e)}", exc_info=True)
+                        response_text = f"❌ Error consultando recordatorios: {str(e)}"
                 else:
-                    logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
+                    # SAVE MODE: User wants to save a thought/reminder/idea/note
+                    logger.info(f"Detected save request in REMINDER layer")
+                    
+                    # Extract type from description
+                    thought_type = "thought"  # default
+                    
+                    if "recordatorio" in desc_lower or "reminder" in desc_lower:
+                        thought_type = "reminder"
+                    elif "idea" in desc_lower:
+                        thought_type = "idea"
+                    elif "nota" in desc_lower or "note" in desc_lower:
+                        thought_type = "note"
+                    elif "pensamiento" in desc_lower or "thought" in desc_lower:
+                        thought_type = "thought"
+                    
+                    # Extract date if mentioned (for reminders)
+                    reminder_date = None
+                    from datetime import datetime, timedelta
+                    if "mañana" in desc_lower or "tomorrow" in desc_lower:
+                        reminder_date = (datetime.now() + timedelta(days=1)).date().isoformat()
+                    elif "hoy" in desc_lower or "today" in desc_lower:
+                        reminder_date = datetime.now().date().isoformat()
+                    
+                    # Extract content - mejor lógica para preservar el contenido
+                    content = user_text.strip()
+                    
+                    # Remover comandos del inicio de manera más inteligente
+                    content_lower = content.lower()
+                    
+                    # Patrones comunes al inicio
+                    if content_lower.startswith("guarda esta idea "):
+                        content = content[17:].strip()
+                    elif content_lower.startswith("guarda este idea "):
+                        content = content[17:].strip()
+                    elif content_lower.startswith("guarda esta "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda este "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda idea "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda recordatorio "):
+                        content = content[20:].strip()
+                    elif content_lower.startswith("guarda pensamiento "):
+                        content = content[19:].strip()
+                    elif content_lower.startswith("guarda nota "):
+                        content = content[12:].strip()
+                    elif content_lower.startswith("guarda "):
+                        content = content[7:].strip()
+                    
+                    # Remover "en la base de datos" si está presente
+                    content = content.replace("en la base de datos", "").replace("en la bd", "").strip()
+                    content = content.replace(":", "").strip()  # Remover dos puntos al final
+                    
+                    # Si después de remover el comando no queda nada, usar el texto original
+                    if not content or len(content.strip()) == 0:
+                        content = user_text.strip()
+                        # Remover solo "guarda" del inicio si está
+                        if content_lower.startswith("guarda "):
+                            content = content[7:].strip()
+                        # Si aún está vacío, usar el texto completo
+                        if not content:
+                            content = user_text.strip()
+                    
+                    # Validar que content no esté vacío
+                    if not content or len(content.strip()) == 0:
+                        content = user_text.strip()  # Usar el texto original como último recurso
+                        if not content:
+                            content = "Sin contenido"  # Fallback mínimo
+                    
+                    logger.info(f"Final content to save: '{content}' (length: {len(content)})")
+                    
+                    # Ensure chat_id is an integer
+                    chat_id_int = int(chat_id) if chat_id else None
+                    if not chat_id_int:
+                        response_text = f"Error: Invalid chat_id: {chat_id}"
+                    else:
+                        logger.info(f"Attempting to save - chat_id: {chat_id_int} (type: {type(chat_id_int)}), content: '{content}' (length: {len(content)}), type: {thought_type}, reminder_date: {reminder_date}")
                     
                     try:
                         # Save thought/reminder

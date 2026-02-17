@@ -872,12 +872,17 @@ async def get_pending_schedule_reminders(
         pending = []
         
         for r in reminders:
-            days_str = str(r.get("days_of_week", ""))
-            if not days_str:
-                continue
-            days = [int(d.strip()) for d in days_str.split(",") if d.strip().isdigit()]
-            if current_weekday not in days:
-                continue
+            specific_date = r.get("specific_date")
+            if specific_date is not None:
+                if str(specific_date) != current_date:
+                    continue
+            else:
+                days_str = str(r.get("days_of_week", ""))
+                if not days_str:
+                    continue
+                days = [int(d.strip()) for d in days_str.split(",") if d.strip().isdigit()]
+                if current_weekday not in days:
+                    continue
             
             last_sent = r.get("last_sent_date")
             if last_sent and str(last_sent) == current_date:
@@ -896,13 +901,15 @@ async def get_pending_schedule_reminders(
         return []
 
 
-async def mark_reminder_sent(reminder_id: str, sent_date: str) -> bool:
-    """Update last_sent_date after sending a reminder."""
+async def mark_reminder_sent(reminder_id: str, sent_date: str, is_one_time: bool = False) -> bool:
+    """Update last_sent_date after sending. If one-time, disable the reminder."""
     try:
         headers = get_supabase_headers()
         url = f"{supabase_url}/rest/v1/schedule_reminders"
         params = {"id": f"eq.{reminder_id}"}
         data = {"last_sent_date": sent_date}
+        if is_one_time:
+            data["enabled"] = False
         
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.patch(url, params=params, json=data, headers=headers)
@@ -959,6 +966,54 @@ async def ensure_default_reminders_for_chat(chat_id: int) -> int:
     except Exception as e:
         logger.error(f"Error ensuring default reminders: {str(e)}")
         return 0
+
+
+async def save_custom_schedule_reminder(
+    chat_id: int,
+    hour: int,
+    minute: int,
+    message: str,
+    specific_date: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Inserta un recordatorio personalizado (ej: "recuérdame a las 4 tal cosa").
+    specific_date: 'YYYY-MM-DD' para uno único, o None para hoy (usa days_of_week del día actual).
+    """
+    try:
+        from datetime import datetime
+        tz_name = os.getenv("KEPLER_TZ", "America/Bogota")
+        try:
+            import pytz
+            tz = pytz.timezone(tz_name)
+        except Exception:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+        else:
+            now = datetime.now(tz)
+        target_date = specific_date if specific_date else now.date().isoformat()
+        days_of_week = "0,1,2,3,4,5,6"
+        data = {
+            "chat_id": chat_id,
+            "hour": hour,
+            "minute": minute,
+            "days_of_week": days_of_week,
+            "message": message,
+            "reminder_type": "custom",
+            "enabled": True,
+        }
+        if specific_date:
+            data["specific_date"] = specific_date
+        headers = get_supabase_headers()
+        url = f"{supabase_url}/rest/v1/schedule_reminders"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=data, headers=headers)
+            if resp.status_code in (200, 201):
+                result = resp.json()
+                return result[0] if isinstance(result, list) and result else result
+        return None
+    except Exception as e:
+        logger.error(f"Error saving custom reminder: {str(e)}")
+        return None
 
 
 async def get_registered_chat_ids() -> list:
